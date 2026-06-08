@@ -1,0 +1,38 @@
+[package]
+name = "hakobin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+anyhow = "1.0"
+aws-config = "1.5"
+aws-credential-types = "1.2"
+aws-sdk-cloudfront = "1.58"
+aws-sdk-s3 = { version = "1.64", features = ["test-util"] }
+bzip2 = "0.6"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+comfy-table = "7.2"
+flate2 = "1.0"
+hex = "0.4"
+inquire = "0.9"
+md-5 = "0.10"
+quick-xml = "0.40"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rpm = { version = "0.25", default-features = false, features = ["signature-pgp"] }
+sequoia-openpgp = { version = "2.3", default-features = false, features = ["compression", "crypto-openssl"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.10"
+sha2 = "0.10"
+tar = "0.4"
+thiserror = "2.0"
+tokio = { version = "1.42", features = ["full"] }
+xz2 = "0.1"
+zstd = "0.13"
+
+[dev-dependencies]
+aws-smithy-mocks = "=0.2.4"
+rpm = { version = "0.25", default-features = false, features = ["payload"] }
+tempfile = "3.15"
