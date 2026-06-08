@@ -1,0 +1,45 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Rust build output
+target/
+
+# Binary
+/apt-s3-repo
+/hakobin
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.deb
+test/
+
+/signing-key.gpg
+/.env*
+internal/repository/signing-key.gpg
+*.gpg
+
+/dist
+/site

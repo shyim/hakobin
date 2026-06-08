@@ -1,0 +1,63 @@
+# GoReleaser configuration
+# Reference: https://goreleaser.com
+
+version: 2
+
+project_name: hakobin
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: ./main.go
+    binary: hakobin
+    ldflags:
+      - -s -w -X hakobin/cmd.Version={{.Version}} -X hakobin/cmd.Commit={{.Commit}} -X hakobin/cmd.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    # Use zip for Windows
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+      - docs/**/*
+
+# Package as .deb and .rpm using NFPM
+nfpms:
+  - id: hakobin
+    package_name: hakobin
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    vendor: Hakobin Maintainers
+    homepage: https://github.com/shyim/hakobin
+    maintainer: Hakobin Maintainers <packages@example.com>
+    description: Go CLI for creating and maintaining DEB/APT and RPM/YUM repositories on S3-compatible storage.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "merge conflict"
