@@ -2,6 +2,7 @@ package rpm
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -102,6 +103,16 @@ func TestParsesGeneratedRpmPackage(t *testing.T) {
 	assert.Equal(t, "x86_64", parsed.Arch)
 	assert.Len(t, parsed.Files, 1)
 	assert.Equal(t, "/usr/bin/demo", parsed.Files[0].Path)
+
+	// header-range must reflect the real header offsets, not 0/0.
+	assert.Greater(t, parsed.HeaderStart, 0)
+	assert.Greater(t, parsed.HeaderEnd, parsed.HeaderStart)
+	// file time is deterministic (derived from build time), not wall-clock.
+	assert.Equal(t, parsed.BuildTime, parsed.FileTime)
+
+	primary := generatePrimaryXML([]RpmPackage{*parsed})
+	assert.Contains(t, primary, fmt.Sprintf("<rpm:header-range start=\"%d\" end=\"%d\"/>", parsed.HeaderStart, parsed.HeaderEnd))
+	assert.NotContains(t, primary, "header-range start=\"0\" end=\"0\"")
 }
 
 func TestRpmPackageSigningLeavesBytesUnchangedWithoutActiveKey(t *testing.T) {

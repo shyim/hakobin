@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cfconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cloudfront"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
 
@@ -68,7 +69,7 @@ func (c *CdnInvalidator) Invalidate(ctx context.Context, cfg *config.Config, pat
 
 	switch c.Type {
 	case "cloudfront":
-		return c.invalidateCloudFront(ctx, paths)
+		return c.invalidateCloudFront(ctx, cfg, paths)
 	case "cloudflare":
 		return c.invalidateCloudflare(ctx, cfg, paths)
 	default:
@@ -76,8 +77,24 @@ func (c *CdnInvalidator) Invalidate(ctx context.Context, cfg *config.Config, pat
 	}
 }
 
-func (c *CdnInvalidator) invalidateCloudFront(ctx context.Context, paths []string) error {
-	awsCfg, err := cfconfig.LoadDefaultConfig(ctx)
+func (c *CdnInvalidator) invalidateCloudFront(ctx context.Context, cfg *config.Config, paths []string) error {
+	// Reuse the same S3 credentials/region the rest of the tool is configured
+	// with, rather than silently falling back to the default AWS chain (which
+	// breaks when S3 credentials are supplied only via env for a non-default
+	// profile or a MinIO-style setup).
+	opts := []func(*cfconfig.LoadOptions) error{}
+	if cfg != nil {
+		if cfg.S3Region != "" {
+			opts = append(opts, cfconfig.WithRegion(cfg.S3Region))
+		}
+		if cfg.S3AccessKeyID != "" && cfg.S3SecretAccessKey != "" {
+			opts = append(opts, cfconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(cfg.S3AccessKeyID, cfg.S3SecretAccessKey, ""),
+			))
+		}
+	}
+
+	awsCfg, err := cfconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to load CloudFront config: %w", err)
 	}

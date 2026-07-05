@@ -192,9 +192,19 @@ func (rm *RepositoryManager) upload(ctx context.Context, req *UploadRequest) err
 		return err
 	}
 
-	metadata, err := rm.loadMetadata(ctx)
+	// Distinguish "repository not initialized yet" (fall back to synthesized
+	// metadata) from a real download/parse error (abort, so we never rewrite
+	// Release with a degraded metadata set on a transient S3 failure).
 	var metadataPtr *RepoMetadata
-	if err == nil {
+	metaExists, err := rm.store.Exists(ctx, rm.key(MetadataPath))
+	if err != nil {
+		return err
+	}
+	if metaExists {
+		metadata, err := rm.loadMetadata(ctx)
+		if err != nil {
+			return err
+		}
 		metadataPtr = metadata
 	}
 
@@ -241,6 +251,21 @@ func (rm *RepositoryManager) upload(ctx context.Context, req *UploadRequest) err
 			fmt.Println("Use --force flag to overwrite existing packages.")
 		}
 		return fmt.Errorf("%d package(s) failed to upload", failed)
+	}
+
+	// A batch can add new architectures partway through (via ensureArchitecture),
+	// so earlier per-file Release writes may not reference them yet. Regenerate
+	// Release once for every declared distribution against the final metadata.
+	if uploaded > 0 && metadataPtr != nil {
+		final, err := rm.loadMetadata(ctx)
+		if err != nil {
+			return err
+		}
+		for _, dist := range final.Distributions {
+			if err := rm.updateRelease(ctx, dist, final, req.SigningKeys); err != nil {
+				return err
+			}
+		}
 	}
 
 	fmt.Println("All packages processed successfully!")
@@ -437,7 +462,7 @@ func (rm *RepositoryManager) remove(ctx context.Context, req *RemoveRequest) err
 		}
 	}
 
-	if err := rm.updateRelease(ctx, req.Distribution, metadata, req.SigningKeys); err != nil {
+	if err := rm.updateRelease(ctx, req.Distribution, metadata, req.SigningKeys, rm.key(poolPath)); err != nil {
 		return err
 	}
 
@@ -640,7 +665,10 @@ func (rm *RepositoryManager) uploadOne(ctx context.Context, filePath string, req
 		}
 	}
 
-	err = rm.updateRelease(ctx, req.Distribution, releaseMetadata, req.SigningKeys)
+	// Invalidate the pool blob too: on a force-overwrite the object bytes
+	// changed under an unchanged key, so the CDN would otherwise serve stale
+	// package contents while Packages advertises the new hash.
+	err = rm.updateRelease(ctx, req.Distribution, releaseMetadata, req.SigningKeys, rm.key(poolPath))
 	if err != nil {
 		return "", err
 	}
@@ -777,7 +805,7 @@ func (rm *RepositoryManager) ensureArchitecture(ctx context.Context, metadata *R
 	return rm.saveMetadata(ctx, metadata)
 }
 
-func (rm *RepositoryManager) updateRelease(ctx context.Context, distribution string, metadata *RepoMetadata, signingKeys *openpgp.SigningKeys) error {
+func (rm *RepositoryManager) updateRelease(ctx context.Context, distribution string, metadata *RepoMetadata, signingKeys *openpgp.SigningKeys, extraInvalidationPaths ...string) error {
 	var architectures []string
 	for _, arch := range metadata.Architectures {
 		if arch != "all" {
@@ -837,6 +865,7 @@ func (rm *RepositoryManager) updateRelease(ctx context.Context, distribution str
 		return err
 	}
 
+	inReleasePath := fmt.Sprintf("dists/%s/InRelease", distribution)
 	if signingKeys != nil && signingKeys.Active != nil {
 		sig, err := signingKeys.Active.SignDetached(releaseData)
 		if err != nil {
@@ -848,42 +877,69 @@ func (rm *RepositoryManager) updateRelease(ctx context.Context, distribution str
 			return err
 		}
 
+		// InRelease is the inline clearsigned Release that modern apt prefers.
+		inRelease, err := signingKeys.Active.ClearSign(releaseData)
+		if err != nil {
+			return err
+		}
+		if err := rm.store.UploadBytes(ctx, rm.key(inReleasePath), []byte(inRelease), "text/plain"); err != nil {
+			return err
+		}
+
 		err = rm.uploadPublicKeys(ctx, signingKeys)
 		if err != nil {
 			return err
 		}
 	}
 
-	invalidator, err := cdn.FromEnv()
-	if err == nil && invalidator != nil {
-		paths := []string{
-			rm.key(releasePath),
-			rm.key(releasePath + ".gpg"),
-		}
+	paths := []string{
+		rm.key(releasePath),
+		rm.key(releasePath + ".gpg"),
+	}
 
-		for _, comp := range metadata.Components {
-			for _, arch := range architectures {
-				paths = append(paths, rm.key(fmt.Sprintf("dists/%s/%s/binary-%s/Packages", distribution, comp, arch)))
-				paths = append(paths, rm.key(fmt.Sprintf("dists/%s/%s/binary-%s/Packages.gz", distribution, comp, arch)))
-			}
-		}
-
-		setupExists, err := rm.store.Exists(ctx, rm.key("setup.sh"))
-		if err == nil && setupExists {
-			paths = append(paths, rm.key("setup.sh"))
-		}
-
-		if signingKeys != nil && signingKeys.Active != nil {
-			paths = append(paths, rm.key("pubkey.asc"))
-			paths = append(paths, rm.key("pubkey.gpg"))
-		}
-
-		if err := invalidator.Invalidate(ctx, rm.cfg, paths); err != nil {
-			fmt.Printf("Warning: CDN invalidation failed: %v\n", err)
+	for _, comp := range metadata.Components {
+		for _, arch := range architectures {
+			paths = append(paths, rm.key(fmt.Sprintf("dists/%s/%s/binary-%s/Packages", distribution, comp, arch)))
+			paths = append(paths, rm.key(fmt.Sprintf("dists/%s/%s/binary-%s/Packages.gz", distribution, comp, arch)))
 		}
 	}
 
+	setupExists, err := rm.store.Exists(ctx, rm.key("setup.sh"))
+	if err == nil && setupExists {
+		paths = append(paths, rm.key("setup.sh"))
+	}
+
+	if signingKeys != nil && signingKeys.Active != nil {
+		paths = append(paths, rm.key(inReleasePath))
+		paths = append(paths, rm.key("pubkey.asc"))
+		paths = append(paths, rm.key("pubkey.gpg"))
+	}
+
+	// Pool blobs written/removed by the caller (e.g. force-overwrite or remove)
+	// must be invalidated too, or the CDN serves stale package bytes.
+	paths = append(paths, extraInvalidationPaths...)
+
+	rm.invalidateCDN(ctx, paths)
+
 	return nil
+}
+
+// invalidateCDN purges the given paths from the configured CDN. A CDN
+// misconfiguration (e.g. an unknown HAKOBIN_CDN_PURGE_TYPE) is surfaced as a
+// loud warning rather than being silently ignored, but never fails the
+// underlying repository operation.
+func (rm *RepositoryManager) invalidateCDN(ctx context.Context, paths []string) {
+	invalidator, err := cdn.FromEnv()
+	if err != nil {
+		fmt.Printf("Warning: CDN not configured correctly, skipping invalidation: %v\n", err)
+		return
+	}
+	if invalidator == nil {
+		return
+	}
+	if err := invalidator.Invalidate(ctx, rm.cfg, paths); err != nil {
+		fmt.Printf("Warning: CDN invalidation failed: %v\n", err)
+	}
 }
 
 func (rm *RepositoryManager) uploadPublicKeys(ctx context.Context, signingKeys *openpgp.SigningKeys) error {

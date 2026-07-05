@@ -12,6 +12,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -245,6 +246,22 @@ func (k *KeyPair) SignDetached(data []byte) (string, error) {
 		return "", err
 	}
 	w.Close()
+	return buf.String(), nil
+}
+
+// ClearSign produces an inline clearsigned message (used for apt's InRelease).
+func (k *KeyPair) ClearSign(data []byte) (string, error) {
+	var buf bytes.Buffer
+	w, err := clearsign.Encode(&buf, k.Entity.PrivateKey, nil)
+	if err != nil {
+		return "", err
+	}
+	if _, err := w.Write(data); err != nil {
+		return "", err
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
 	return buf.String(), nil
 }
 

@@ -124,10 +124,11 @@ func (rm *RpmRepositoryManager) upload(ctx context.Context, req *RpmUploadReques
 	skipped := 0
 	failed := 0
 	var firstErr error
+	var uploadedKeys []string
 
 	for index, file := range req.RpmFiles {
 		fmt.Printf("\n[%d/%d] Processing: %s\n", index+1, len(req.RpmFiles), file)
-		outcome, err := rm.uploadOne(ctx, file, req)
+		outcome, key, err := rm.uploadOne(ctx, file, req)
 		if err != nil {
 			failed++
 			fmt.Printf("Failed: %v\n", err)
@@ -138,6 +139,7 @@ func (rm *RpmRepositoryManager) upload(ctx context.Context, req *RpmUploadReques
 			switch outcome {
 			case uploadOutcomeUploaded:
 				uploaded++
+				uploadedKeys = append(uploadedKeys, key)
 				fmt.Println("Uploaded successfully")
 			case uploadOutcomeSkipped:
 				skipped++
@@ -152,7 +154,8 @@ func (rm *RpmRepositoryManager) upload(ctx context.Context, req *RpmUploadReques
 			return err
 		}
 
-		if err := rm.writeMetadata(ctx, req.Repo, req.Arch, packages, req.SigningKeys); err != nil {
+		// Invalidate the (possibly overwritten) package blobs alongside metadata.
+		if err := rm.writeMetadata(ctx, req.Repo, req.Arch, packages, req.SigningKeys, uploadedKeys...); err != nil {
 			return err
 		}
 	}
@@ -249,12 +252,26 @@ func (rm *RpmRepositoryManager) remove(ctx context.Context, req *RpmRemoveReques
 		return err
 	}
 
+	// Match on NEVR first, then prefer an exact architecture match; fall back to
+	// a noarch package with the same NEVR so a user need not know whether the
+	// package was arch-specific or arch-independent to remove it.
 	var target *RpmPackage
-	for _, p := range packages {
-		if p.Name == req.Package && p.Epoch == req.Epoch && p.Version == req.Version && p.Release == req.Release && p.Arch == req.Arch {
-			target = &p
+	var noarchFallback *RpmPackage
+	for i := range packages {
+		p := packages[i]
+		if p.Name != req.Package || p.Epoch != req.Epoch || p.Version != req.Version || p.Release != req.Release {
+			continue
+		}
+		if p.Arch == req.Arch {
+			target = &packages[i]
 			break
 		}
+		if p.Arch == "noarch" {
+			noarchFallback = &packages[i]
+		}
+	}
+	if target == nil {
+		target = noarchFallback
 	}
 
 	if target == nil {
@@ -282,7 +299,8 @@ func (rm *RpmRepositoryManager) remove(ctx context.Context, req *RpmRemoveReques
 		}
 	}
 
-	if err := rm.store.Delete(ctx, rm.key(req.Repo, req.RepoArch, target.Location)); err != nil {
+	removedBlob := rm.key(req.Repo, req.RepoArch, target.Location)
+	if err := rm.store.Delete(ctx, removedBlob); err != nil {
 		return err
 	}
 
@@ -292,7 +310,7 @@ func (rm *RpmRepositoryManager) remove(ctx context.Context, req *RpmRemoveReques
 		return err
 	}
 
-	if err := rm.writeMetadata(ctx, req.Repo, req.RepoArch, packages, req.SigningKeys); err != nil {
+	if err := rm.writeMetadata(ctx, req.Repo, req.RepoArch, packages, req.SigningKeys, removedBlob); err != nil {
 		return err
 	}
 
@@ -366,14 +384,14 @@ const (
 	uploadOutcomeSkipped  uploadOutcome = "skipped"
 )
 
-func (rm *RpmRepositoryManager) uploadOne(ctx context.Context, filePath string, req *RpmUploadRequest) (uploadOutcome, error) {
+func (rm *RpmRepositoryManager) uploadOne(ctx context.Context, filePath string, req *RpmUploadRequest) (uploadOutcome, string, error) {
 	pkg, err := FromPath(filePath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if pkg.Arch != req.Arch && pkg.Arch != "noarch" {
-		return "", fmt.Errorf("package architecture %s does not match repository architecture %s", pkg.Arch, req.Arch)
+		return "", "", fmt.Errorf("package architecture %s does not match repository architecture %s", pkg.Arch, req.Arch)
 	}
 
 	fmt.Printf("  Package: %s\n", pkg.Name)
@@ -389,21 +407,21 @@ func (rm *RpmRepositoryManager) uploadOne(ctx context.Context, filePath string, 
 		if req.Force {
 			fmt.Println("  Force uploading (overwriting existing package)")
 		} else {
-			return uploadOutcomeSkipped, nil
+			return uploadOutcomeSkipped, "", nil
 		}
 	}
 
 	signedPkg, err := pkg.Signed(req.SigningKeys)
 	if err != nil {
-		return "", fmt.Errorf("failed to sign RPM package %s: %w", filePath, err)
+		return "", "", fmt.Errorf("failed to sign RPM package %s: %w", filePath, err)
 	}
 
 	err = rm.store.UploadBytes(ctx, key, signedPkg.Raw, "application/x-rpm")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return uploadOutcomeUploaded, nil
+	return uploadOutcomeUploaded, key, nil
 }
 
 func (rm *RpmRepositoryManager) loadPackages(ctx context.Context, repo, arch string) ([]RpmPackage, error) {
@@ -458,7 +476,7 @@ func (rm *RpmRepositoryManager) discoverRepositories(ctx context.Context) ([]Rpm
 	return repos, nil
 }
 
-func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch string, packages []RpmPackage, signingKeys *openpgp.SigningKeys) error {
+func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch string, packages []RpmPackage, signingKeys *openpgp.SigningKeys, extraInvalidationPaths ...string) error {
 	metadata, err := GenerateRepositoryMetadata(packages)
 	if err != nil {
 		return err
@@ -497,26 +515,38 @@ func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch st
 		}
 	}
 
-	invalidator, err := cdn.FromEnv()
-	if err == nil && invalidator != nil {
-		paths := []string{
-			repodataPrefix + "repomd.xml",
-			repodataPrefix + metadata.Primary.Filename,
-			repodataPrefix + metadata.Filelists.Filename,
-			repodataPrefix + metadata.Other.Filename,
-		}
-
-		if signingKeys != nil && signingKeys.Active != nil {
-			paths = append(paths, repodataPrefix+"repomd.xml.asc")
-			paths = append(paths, pubKeyPath)
-		}
-
-		if err := invalidator.Invalidate(ctx, rm.cfg, paths); err != nil {
-			fmt.Printf("Warning: CDN invalidation failed: %v\n", err)
-		}
+	paths := []string{
+		repodataPrefix + "repomd.xml",
+		repodataPrefix + metadata.Primary.Filename,
+		repodataPrefix + metadata.Filelists.Filename,
+		repodataPrefix + metadata.Other.Filename,
 	}
 
+	if signingKeys != nil && signingKeys.Active != nil {
+		paths = append(paths, repodataPrefix+"repomd.xml.asc")
+		paths = append(paths, pubKeyPath)
+	}
+	paths = append(paths, extraInvalidationPaths...)
+
+	rm.invalidateCDN(ctx, paths)
+
 	return nil
+}
+
+// invalidateCDN purges the given paths from the configured CDN, surfacing a
+// misconfiguration as a loud warning rather than silently skipping.
+func (rm *RpmRepositoryManager) invalidateCDN(ctx context.Context, paths []string) {
+	invalidator, err := cdn.FromEnv()
+	if err != nil {
+		fmt.Printf("Warning: CDN not configured correctly, skipping invalidation: %v\n", err)
+		return
+	}
+	if invalidator == nil {
+		return
+	}
+	if err := invalidator.Invalidate(ctx, rm.cfg, paths); err != nil {
+		fmt.Printf("Warning: CDN invalidation failed: %v\n", err)
+	}
 }
 
 func (rm *RpmRepositoryManager) repoPrefix(repo, arch string) string {

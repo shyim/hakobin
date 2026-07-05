@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	s3config "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
@@ -54,8 +55,9 @@ type lockRecord struct {
 }
 
 type S3Store struct {
-	client *s3.Client
-	bucket string
+	client   *s3.Client
+	uploader *transfermanager.Client
+	bucket   string
 }
 
 func NewS3Store(ctx context.Context, cfg *config.Config) (*S3Store, error) {
@@ -85,22 +87,42 @@ func NewS3Store(ctx context.Context, cfg *config.Config) (*S3Store, error) {
 	})
 
 	return &S3Store{
-		client: client,
-		bucket: bucket,
+		client:   client,
+		uploader: transfermanager.New(client),
+		bucket:   bucket,
 	}, nil
 }
 
 func (s *S3Store) UploadBytes(ctx context.Context, key string, body []byte, contentType string) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(s.bucket),
-		Key:         aws.String(key),
-		Body:        bytes.NewReader(body),
-		ContentType: aws.String(contentType),
+	// Use the transfer manager so large package blobs are uploaded via
+	// automatic multipart (lifting the 5 GiB single-PutObject limit) rather
+	// than a single PutObject call.
+	_, err := s.uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket:       aws.String(s.bucket),
+		Key:          aws.String(key),
+		Body:         bytes.NewReader(body),
+		ContentType:  aws.String(contentType),
+		CacheControl: aws.String(cacheControlFor(key, contentType)),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to upload s3://%s/%s: %w", s.bucket, key, err)
 	}
 	return nil
+}
+
+// cacheControlFor returns a Cache-Control value appropriate to the object.
+// Package blobs are content-addressed (their key never changes for given
+// bytes) and can be cached for a long time; repository metadata changes in
+// place on every upload and must be revalidated quickly so clients do not act
+// on a stale index whose hashes no longer match.
+func cacheControlFor(key, contentType string) string {
+	switch contentType {
+	case "application/vnd.debian.binary-package", "application/x-rpm":
+		return "public, max-age=31536000, immutable"
+	}
+	// repodata metadata files are named by checksum and are effectively
+	// immutable, but repomd.xml / Release / Packages are rewritten in place.
+	return "public, max-age=60, must-revalidate"
 }
 
 func (s *S3Store) Download(ctx context.Context, key string) ([]byte, error) {

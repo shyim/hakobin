@@ -112,6 +112,11 @@ to `SignRpmFile` producing an error or bad signature.
 
 ## 🟡 Medium
 
+> **Status:** All 11 medium items below were fixed on branch `fix/high-severity-review`.
+> Verified with `go build`, `go vet`, `golangci-lint` (0 issues), the unit suite
+> (with added tests), and the MinIO e2e suite. The 🟢 Low items remain open.
+
+
 - **No `InRelease` (clearsigned) file** — only detached `Release.gpg`. Modern apt prefers `InRelease`.
   `internal/repository/repository.go:728-745`
 - **CDN invalidation misses overwritten pool blobs.** On `--force` re-upload and on remove, the `.deb`

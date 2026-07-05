@@ -175,6 +175,12 @@ func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
 	assert.Contains(t, string(release), "main/binary-amd64/Packages")
 	assert.Contains(t, string(release), "main/binary-arm64/Packages")
 
+	// A clearsigned InRelease must be published for modern apt.
+	inRelease, ok := store.Body("deb/dists/stable/InRelease")
+	require.True(t, ok)
+	assert.Contains(t, string(inRelease), "-----BEGIN PGP SIGNED MESSAGE-----")
+	assert.Contains(t, string(inRelease), "main/binary-amd64/Packages")
+
 	// Removal must clear it from all concrete indexes.
 	require.NoError(t, manager.Remove(ctx, &RemoveRequest{
 		Package:      "docs",

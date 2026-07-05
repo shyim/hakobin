@@ -21,6 +21,11 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
+// maxControlTarBytes bounds the decompressed control tarball. Real control
+// tarballs hold only a handful of small text files; anything larger is treated
+// as hostile input (decompression bomb).
+const maxControlTarBytes = 32 << 20 // 32 MiB
+
 type DebPackage struct {
 	Filename string
 	Size     uint64
@@ -268,7 +273,18 @@ func decompressControlTar(data []byte, name string) ([]byte, error) {
 		r = bzip2.NewReader(r)
 	}
 
-	return io.ReadAll(r)
+	// Cap the decompressed control tarball to guard against decompression
+	// bombs: a real control.tar is tiny (a few control files), so a low limit
+	// is safe while a maliciously crafted archive cannot exhaust memory.
+	limited := io.LimitReader(r, maxControlTarBytes+1)
+	out, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > maxControlTarBytes {
+		return nil, fmt.Errorf("control tarball exceeds %d bytes (possible decompression bomb)", maxControlTarBytes)
+	}
+	return out, nil
 }
 
 type arEntry struct {

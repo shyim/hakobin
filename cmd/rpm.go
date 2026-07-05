@@ -181,6 +181,15 @@ var rpmRemoveCmd = &cobra.Command{
 		}
 		manager := rpm.NewRpmRepositoryManager(cfg, store)
 
+		// If --repo-arch was not explicitly given, target the repository whose
+		// architecture matches --arch. This makes removing an arch-specific
+		// package work with a single --arch flag; noarch packages still resolve
+		// because Remove matches noarch within the given repo.
+		repoArch := rpmRemoveRepoArch
+		if !cmd.Flags().Changed("repo-arch") {
+			repoArch = rpmRemoveArch
+		}
+
 		req := &rpm.RpmRemoveRequest{
 			Package:     args[0],
 			Epoch:       rpmRemoveEpoch,
@@ -188,7 +197,7 @@ var rpmRemoveCmd = &cobra.Command{
 			Release:     rpmRemoveRel,
 			Arch:        rpmRemoveArch,
 			Repo:        rpmRepo,
-			RepoArch:    rpmRemoveRepoArch,
+			RepoArch:    repoArch,
 			Force:       rpmRemoveForce,
 			SigningKeys: keys,
 		}

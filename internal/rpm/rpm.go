@@ -36,6 +36,9 @@ type RpmPackage struct {
 	URL           string          `json:"url"`
 	SourceRpm     string          `json:"source_rpm"`
 	BuildTime     uint64          `json:"build_time"`
+	FileTime      uint64          `json:"file_time"`
+	HeaderStart   int             `json:"header_start"`
+	HeaderEnd     int             `json:"header_end"`
 	PackageSize   uint64          `json:"package_size"`
 	InstalledSize uint64          `json:"installed_size"`
 	ArchiveSize   uint64          `json:"archive_size"`
@@ -118,6 +121,8 @@ func FromBytes(location string, raw []byte) (*RpmPackage, error) {
 		archiveSize = int64(len(raw))
 	}
 
+	headerRange := rpm.Header.GetRange()
+
 	installedSize, _ := rpm.Header.InstalledSize()
 
 	sum := sha256.Sum256(raw)
@@ -164,6 +169,9 @@ func FromBytes(location string, raw []byte) (*RpmPackage, error) {
 		URL:           url,
 		SourceRpm:     sourceRpm,
 		BuildTime:     uint64(buildTime),
+		FileTime:      uint64(buildTime),
+		HeaderStart:   headerRange.Start,
+		HeaderEnd:     headerRange.End,
 		PackageSize:   uint64(len(raw)),
 		InstalledSize: uint64(installedSize),
 		ArchiveSize:   uint64(archiveSize),
@@ -493,7 +501,7 @@ func generatePrimaryXML(packages []RpmPackage) string {
 		tag(&out, "description", p.Description)
 		tag(&out, "packager", "")
 		tag(&out, "url", p.URL)
-		fmt.Fprintf(&out, "<time file=\"%d\" build=\"%d\"/>", time.Now().Unix(), p.BuildTime)
+		fmt.Fprintf(&out, "<time file=\"%d\" build=\"%d\"/>", p.FileTime, p.BuildTime)
 		fmt.Fprintf(&out, "<size package=\"%d\" installed=\"%d\" archive=\"%d\"/>", p.PackageSize, p.InstalledSize, p.ArchiveSize)
 		fmt.Fprintf(&out, "<location href=\"%s\"/>", xmlEscape(p.Location))
 		out.WriteString("<format>")
@@ -502,7 +510,7 @@ func generatePrimaryXML(packages []RpmPackage) string {
 		rpmTag(&out, "group", p.Group)
 		rpmTag(&out, "buildhost", "")
 		rpmTag(&out, "sourcerpm", p.SourceRpm)
-		out.WriteString("<rpm:header-range start=\"0\" end=\"0\"/>")
+		fmt.Fprintf(&out, "<rpm:header-range start=\"%d\" end=\"%d\"/>", p.HeaderStart, p.HeaderEnd)
 		dependencyBlock(&out, "rpm:provides", p.Provides)
 		dependencyBlock(&out, "rpm:requires", p.Requires)
 		dependencyBlock(&out, "rpm:conflicts", p.Conflicts)
