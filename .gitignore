@@ -38,3 +38,5 @@ test/
 
 /signing-key.gpg
 /.env*
+internal/repository/signing-key.gpg
+*.gpg
