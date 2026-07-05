@@ -18,8 +18,8 @@ go.work
 target/
 
 # Binary
-apt-s3-repo
-hakobin
+/apt-s3-repo
+/hakobin
 
 # IDE
 .idea/

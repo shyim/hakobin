@@ -1,0 +1,336 @@
+package openpgp
+
+import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
+)
+
+type KeyPair struct {
+	Entity      *openpgp.Entity
+	PublicKey   string
+	KeyID       string
+	Fingerprint string
+	Expiration  *time.Time
+}
+
+type PublicKeyCert struct {
+	Entity      *openpgp.Entity
+	PublicKey   string
+	KeyID       string
+	Fingerprint string
+	Expiration  *time.Time
+}
+
+type SigningKeys struct {
+	Active             *KeyPair
+	TrustedPublicKeys  []*PublicKeyCert
+}
+
+func NewKeyPair(entity *openpgp.Entity) (*KeyPair, error) {
+	// Strip private key to get public key armored representation
+	var pubBuf bytes.Buffer
+	w, err := armor.Encode(&pubBuf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := entity.Serialize(w); err != nil {
+		return nil, err
+	}
+	w.Close()
+
+	keyID := fmt.Sprintf("%016x", entity.PrimaryKey.KeyId)
+	fp := hex.EncodeToString(entity.PrimaryKey.Fingerprint[:])
+
+	var expiration *time.Time
+	for _, ident := range entity.Identities {
+		if ident.SelfSignature != nil && ident.SelfSignature.KeyLifetimeSecs != nil {
+			lifetime := *ident.SelfSignature.KeyLifetimeSecs
+			if lifetime > 0 {
+				exp := entity.PrimaryKey.CreationTime.Add(time.Duration(lifetime) * time.Second)
+				expiration = &exp
+			}
+		}
+		break
+	}
+
+	return &KeyPair{
+		Entity:      entity,
+		PublicKey:   pubBuf.String(),
+		KeyID:       keyID,
+		Fingerprint: fp,
+		Expiration:  expiration,
+	}, nil
+}
+
+func NewPublicKeyCert(entity *openpgp.Entity) (*PublicKeyCert, error) {
+	var pubBuf bytes.Buffer
+	w, err := armor.Encode(&pubBuf, openpgp.PublicKeyType, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := entity.Serialize(w); err != nil {
+		return nil, err
+	}
+	w.Close()
+
+	keyID := fmt.Sprintf("%016x", entity.PrimaryKey.KeyId)
+	fp := hex.EncodeToString(entity.PrimaryKey.Fingerprint[:])
+
+	var expiration *time.Time
+	for _, ident := range entity.Identities {
+		if ident.SelfSignature != nil && ident.SelfSignature.KeyLifetimeSecs != nil {
+			lifetime := *ident.SelfSignature.KeyLifetimeSecs
+			if lifetime > 0 {
+				exp := entity.PrimaryKey.CreationTime.Add(time.Duration(lifetime) * time.Second)
+				expiration = &exp
+			}
+		}
+		break
+	}
+
+	return &PublicKeyCert{
+		Entity:      entity,
+		PublicKey:   pubBuf.String(),
+		KeyID:       keyID,
+		Fingerprint: fp,
+		Expiration:  expiration,
+	}, nil
+}
+
+func GenerateKeyPair(name, email, comment string, expirationYears uint32) (*KeyPair, error) {
+	var lifetimeSecs uint32
+	if expirationYears > 0 {
+		lifetimeSecs = expirationYears * 365 * 24 * 60 * 60
+	}
+
+	config := &packet.Config{
+		Algorithm:       packet.PubKeyAlgoRSA,
+		RSABits:         4096,
+		KeyLifetimeSecs: lifetimeSecs,
+	}
+
+	entity, err := openpgp.NewEntity(name, comment, email, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate entity: %w", err)
+	}
+
+	return NewKeyPair(entity)
+}
+
+func LoadKeyPairFromPath(path string) (*KeyPair, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return LoadKeyPairFromArmored(string(data))
+}
+
+func LoadKeyPairFromArmored(data string) (*KeyPair, error) {
+	if !strings.Contains(data, "-----BEGIN PGP PRIVATE KEY BLOCK-----") {
+		return nil, fmt.Errorf("invalid private key format: expected ASCII armored PGP private key")
+	}
+	entityList, err := openpgp.ReadArmoredKeyRing(strings.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if len(entityList) == 0 {
+		return nil, fmt.Errorf("no keys found in private key block")
+	}
+	return NewKeyPair(entityList[0])
+}
+
+func (k *KeyPair) SavePrivateKey(path string) error {
+	armored, err := k.PrivateKeyArmored()
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	err = os.WriteFile(path, []byte(armored), 0600)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (k *KeyPair) PrivateKeyArmored() (string, error) {
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.PrivateKeyType, nil)
+	if err != nil {
+		return "", err
+	}
+	err = k.Entity.SerializePrivate(w, nil)
+	if err != nil {
+		return "", err
+	}
+	w.Close()
+	return buf.String(), nil
+}
+
+func (k *KeyPair) PublicKeyBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	err := k.Entity.Serialize(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (k *KeyPair) PublicKeyCert() (*PublicKeyCert, error) {
+	return NewPublicKeyCert(k.Entity)
+}
+
+func (k *KeyPair) SignDetached(data []byte) (string, error) {
+	var buf bytes.Buffer
+	w, err := armor.Encode(&buf, openpgp.SignatureType, nil)
+	if err != nil {
+		return "", err
+	}
+	err = openpgp.DetachSign(w, k.Entity, bytes.NewReader(data), nil)
+	if err != nil {
+		return "", err
+	}
+	w.Close()
+	return buf.String(), nil
+}
+
+func LoadPublicKeyCerts(path string) ([]*PublicKeyCert, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePublicKeyCerts(data)
+}
+
+func ParsePublicKeyCerts(data []byte) ([]*PublicKeyCert, error) {
+	var entityList openpgp.EntityList
+	if bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+		r := bytes.NewReader(data)
+		for {
+			block, err := armor.Decode(r)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if block.Type != openpgp.PublicKeyType {
+				continue
+			}
+			subList, err := openpgp.ReadKeyRing(block.Body)
+			if err != nil {
+				return nil, err
+			}
+			entityList = append(entityList, subList...)
+		}
+	} else {
+		var err error
+		entityList, err = openpgp.ReadKeyRing(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var certs []*PublicKeyCert
+	for _, entity := range entityList {
+		cert, err := NewPublicKeyCert(entity)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+	return certs, nil
+}
+
+func (p *PublicKeyCert) ToBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	err := p.Entity.Serialize(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func NewSigningKeys(active *KeyPair, trusted []*PublicKeyCert) *SigningKeys {
+	seen := make(map[string]bool)
+	if active != nil {
+		seen[active.Fingerprint] = true
+	}
+
+	var deduped []*PublicKeyCert
+	for _, cert := range trusted {
+		if !seen[cert.Fingerprint] {
+			seen[cert.Fingerprint] = true
+			deduped = append(deduped, cert)
+		}
+	}
+
+	return &SigningKeys{
+		Active:            active,
+		TrustedPublicKeys: deduped,
+	}
+}
+
+func (s *SigningKeys) PublicCerts() ([]*PublicKeyCert, error) {
+	var certs []*PublicKeyCert
+	if s.Active != nil {
+		cert, err := s.Active.PublicKeyCert()
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+	certs = append(certs, s.TrustedPublicKeys...)
+	return certs, nil
+}
+
+func (s *SigningKeys) PublicKeyArmored() ([]byte, error) {
+	certs, err := s.PublicCerts()
+	if err != nil {
+		return nil, err
+	}
+
+	var out strings.Builder
+	for _, cert := range certs {
+		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+			out.WriteString("\n")
+		}
+		out.WriteString(cert.PublicKey)
+		if !strings.HasSuffix(cert.PublicKey, "\n") {
+			out.WriteString("\n")
+		}
+	}
+	return []byte(out.String()), nil
+}
+
+func (s *SigningKeys) PublicKeyBinary() ([]byte, error) {
+	certs, err := s.PublicCerts()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []byte
+	for _, cert := range certs {
+		bin, err := cert.ToBinary()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bin...)
+	}
+	return out, nil
+}

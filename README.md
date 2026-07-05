@@ -1,14 +1,14 @@
 # Hakobin Package
 
-Rust CLI for creating and maintaining DEB/APT and RPM/YUM repositories on S3-compatible storage.
+Go CLI for creating and maintaining DEB/APT and RPM/YUM repositories on S3-compatible storage.
 
 ## Build
 
 ```bash
-cargo build --release
+go build -o hakobin main.go
 ```
 
-The binary is written to `target/release/hakobin`.
+The binary is written to `./hakobin`.
 
 ## Documentation
 

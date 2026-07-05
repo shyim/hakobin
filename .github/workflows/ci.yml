@@ -15,94 +15,46 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up Go
+      uses: actions/setup-go@v5
       with:
-        toolchain: stable
+        go-version: '1.26'
+        cache: true
 
-    - name: Cache Cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+    - name: Run go fmt
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Files need formatting:"
+          gofmt -s -l .
+          exit 1
+        fi
 
-    - name: Check formatting
-      run: cargo fmt --check
+    - name: Run go vet
+      run: go vet ./...
 
     - name: Run tests
-      run: cargo test --locked
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Check out code
-      uses: actions/checkout@v4
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        components: clippy
-
-    - name: Cache Cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
-
-    - name: Run clippy
-      run: cargo clippy --locked --all-targets -- -D warnings
+      run: go test -v ./...
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    needs: test
 
     steps:
     - name: Check out code
       uses: actions/checkout@v4
 
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
-    - name: Set up Rust
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up Go
+      uses: actions/setup-go@v5
       with:
-        toolchain: stable
-
-    - name: Cache Cargo
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+        go-version: '1.26'
+        cache: true
 
     - name: Build release binary
-      run: cargo build --locked --release
+      run: go build -v -o hakobin main.go
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: hakobin-linux
-        path: target/release/hakobin
+        path: hakobin
