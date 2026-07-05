@@ -338,13 +338,12 @@ func (rm *RepositoryManager) ListPackages(ctx context.Context, distribution, com
 		return nil
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Package", "Version", "Architecture", "Component", "Distribution", "Description"})
-	table.SetBorder(true)
-	table.SetAutoWrapText(false)
+	table := tablewriter.NewTable(os.Stdout,
+		tablewriter.WithHeader([]string{"Package", "Version", "Architecture", "Component", "Distribution", "Description"}),
+	)
 
 	for _, r := range uniqueRows {
-		table.Append([]string{
+		_ = table.Append([]string{
 			r.Name,
 			r.Version,
 			r.Architecture,
@@ -353,7 +352,7 @@ func (rm *RepositoryManager) ListPackages(ctx context.Context, distribution, com
 			truncate(r.Description, 60),
 		})
 	}
-	table.Render()
+	_ = table.Render()
 	fmt.Printf("\nTotal packages: %d\n", len(uniqueRows))
 
 	return nil

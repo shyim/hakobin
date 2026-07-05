@@ -188,13 +188,12 @@ func (rm *RpmRepositoryManager) List(ctx context.Context, req *RpmListRequest) e
 		return nil
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"Package", "Epoch", "Version", "Release", "Arch", "Summary"})
-	table.SetBorder(true)
-	table.SetAutoWrapText(false)
+	table := tablewriter.NewTable(os.Stdout,
+		tablewriter.WithHeader([]string{"Package", "Epoch", "Version", "Release", "Arch", "Summary"}),
+	)
 
 	for _, p := range filtered {
-		table.Append([]string{
+		_ = table.Append([]string{
 			p.Name,
 			p.Epoch,
 			p.Version,
@@ -203,7 +202,7 @@ func (rm *RpmRepositoryManager) List(ctx context.Context, req *RpmListRequest) e
 			truncate(p.Summary, 60),
 		})
 	}
-	table.Render()
+	_ = table.Render()
 	fmt.Printf("\nTotal RPM packages: %d\n", len(filtered))
 
 	return nil
