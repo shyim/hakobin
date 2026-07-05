@@ -160,7 +160,7 @@ func (c *CdnInvalidator) invalidateCloudflare(ctx context.Context, cfg *config.C
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := ioReadAll(resp.Body)
-			return fmt.Errorf("Cloudflare purge failed with status %d: %s", resp.StatusCode, string(body))
+			return fmt.Errorf("cloudflare purge failed with status %d: %s", resp.StatusCode, string(body))
 		}
 	}
 
@@ -179,8 +179,4 @@ func ioReadAll(r io.Reader) ([]byte, error) {
 	var buf bytes.Buffer
 	_, err := io.Copy(&buf, r)
 	return buf.Bytes(), err
-}
-
-type ioReader interface {
-	io.Reader
 }

@@ -32,8 +32,8 @@ type PublicKeyCert struct {
 }
 
 type SigningKeys struct {
-	Active             *KeyPair
-	TrustedPublicKeys  []*PublicKeyCert
+	Active            *KeyPair
+	TrustedPublicKeys []*PublicKeyCert
 }
 
 func NewKeyPair(entity *openpgp.Entity) (*KeyPair, error) {

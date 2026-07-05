@@ -131,13 +131,13 @@ func TestRpmPackageSigningUsesActiveKey(t *testing.T) {
 
 func testRpmPackage() ([]byte, error) {
 	rpm, err := rpmpack.NewRPM(rpmpack.RPMMetaData{
-		Name:    "demo",
-		Version: "1.0.0",
-		Release: "1.el9",
-		Arch:    "x86_64",
-		Summary: "Demo",
+		Name:        "demo",
+		Version:     "1.0.0",
+		Release:     "1.el9",
+		Arch:        "x86_64",
+		Summary:     "Demo",
 		Description: "Demo package",
-		Licence: "MIT",
+		Licence:     "MIT",
 	})
 	if err != nil {
 		return nil, err

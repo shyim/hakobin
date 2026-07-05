@@ -116,13 +116,13 @@ func (d *DebPackage) PackageEntry(poolPath string) string {
 
 	var out strings.Builder
 	for _, k := range keys {
-		out.WriteString(fmt.Sprintf("%s: %s\n", k, d.Control[k]))
+		fmt.Fprintf(&out, "%s: %s\n", k, d.Control[k])
 	}
-	out.WriteString(fmt.Sprintf("Filename: %s\n", poolPath))
-	out.WriteString(fmt.Sprintf("Size: %d\n", d.Size))
-	out.WriteString(fmt.Sprintf("MD5sum: %s\n", d.MD5))
-	out.WriteString(fmt.Sprintf("SHA1: %s\n", d.SHA1))
-	out.WriteString(fmt.Sprintf("SHA256: %s\n", d.SHA256))
+	fmt.Fprintf(&out, "Filename: %s\n", poolPath)
+	fmt.Fprintf(&out, "Size: %d\n", d.Size)
+	fmt.Fprintf(&out, "MD5sum: %s\n", d.MD5)
+	fmt.Fprintf(&out, "SHA1: %s\n", d.SHA1)
+	fmt.Fprintf(&out, "SHA256: %s\n", d.SHA256)
 	return out.String()
 }
 

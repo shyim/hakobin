@@ -18,36 +18,36 @@ import (
 )
 
 const (
-	RpmPrefix         = "rpm"
-	RpmPublicKeyName  = "RPM-GPG-KEY-hakobin.asc"
+	RpmPrefix        = "rpm"
+	RpmPublicKeyName = "RPM-GPG-KEY-hakobin.asc"
 )
 
 type RpmPackage struct {
-	Name         string          `json:"name"`
-	Epoch        string          `json:"epoch"`
-	Version      string          `json:"version"`
-	Release      string          `json:"release"`
-	Arch         string          `json:"arch"`
-	Summary      string          `json:"summary"`
-	Description  string          `json:"description"`
-	License      string          `json:"license"`
-	Vendor       string          `json:"vendor"`
-	Group        string          `json:"group"`
-	URL          string          `json:"url"`
-	SourceRpm    string          `json:"source_rpm"`
-	BuildTime    uint64          `json:"build_time"`
-	PackageSize  uint64          `json:"package_size"`
+	Name          string          `json:"name"`
+	Epoch         string          `json:"epoch"`
+	Version       string          `json:"version"`
+	Release       string          `json:"release"`
+	Arch          string          `json:"arch"`
+	Summary       string          `json:"summary"`
+	Description   string          `json:"description"`
+	License       string          `json:"license"`
+	Vendor        string          `json:"vendor"`
+	Group         string          `json:"group"`
+	URL           string          `json:"url"`
+	SourceRpm     string          `json:"source_rpm"`
+	BuildTime     uint64          `json:"build_time"`
+	PackageSize   uint64          `json:"package_size"`
 	InstalledSize uint64          `json:"installed_size"`
-	ArchiveSize  uint64          `json:"archive_size"`
-	Checksum     string          `json:"checksum"`
-	Location     string          `json:"location"`
-	Files        []RpmFile       `json:"files"`
-	Provides     []RpmDependency `json:"provides"`
-	Requires     []RpmDependency `json:"requires"`
-	Conflicts    []RpmDependency `json:"conflicts"`
-	Obsoletes    []RpmDependency `json:"obsoletes"`
-	Changelogs   []RpmChangelog  `json:"changelogs"`
-	Raw          []byte          `json:"raw"`
+	ArchiveSize   uint64          `json:"archive_size"`
+	Checksum      string          `json:"checksum"`
+	Location      string          `json:"location"`
+	Files         []RpmFile       `json:"files"`
+	Provides      []RpmDependency `json:"provides"`
+	Requires      []RpmDependency `json:"requires"`
+	Conflicts     []RpmDependency `json:"conflicts"`
+	Obsoletes     []RpmDependency `json:"obsoletes"`
+	Changelogs    []RpmChangelog  `json:"changelogs"`
+	Raw           []byte          `json:"raw"`
 }
 
 type RpmFile struct {
@@ -130,9 +130,10 @@ func FromBytes(location string, raw []byte) (*RpmPackage, error) {
 			kind := "file"
 			mode := f.Mode()
 			// Check unix mode directory flag
-			if (mode & 0170000) == 0040000 {
+			switch mode & 0170000 {
+			case 0040000:
 				kind = "dir"
-			} else if (mode & 0170000) == 0120000 {
+			case 0120000:
 				kind = "ghost"
 			}
 			files = append(files, RpmFile{
@@ -150,31 +151,31 @@ func FromBytes(location string, raw []byte) (*RpmPackage, error) {
 	changelogs, _ := readChangelogs(rpm.Header)
 
 	return &RpmPackage{
-		Name:         nevra.Name,
-		Epoch:        nevra.Epoch,
-		Version:      nevra.Version,
-		Release:      nevra.Release,
-		Arch:         nevra.Arch,
-		Summary:      summary,
-		Description:  description,
-		License:      license,
-		Vendor:       vendor,
-		Group:        group,
-		URL:          url,
-		SourceRpm:    sourceRpm,
-		BuildTime:    uint64(buildTime),
-		PackageSize:  uint64(len(raw)),
+		Name:          nevra.Name,
+		Epoch:         nevra.Epoch,
+		Version:       nevra.Version,
+		Release:       nevra.Release,
+		Arch:          nevra.Arch,
+		Summary:       summary,
+		Description:   description,
+		License:       license,
+		Vendor:        vendor,
+		Group:         group,
+		URL:           url,
+		SourceRpm:     sourceRpm,
+		BuildTime:     uint64(buildTime),
+		PackageSize:   uint64(len(raw)),
 		InstalledSize: uint64(installedSize),
-		ArchiveSize:  uint64(archiveSize),
-		Checksum:     checksum,
-		Location:     location,
-		Files:        files,
-		Provides:     provides,
-		Requires:     requires,
-		Conflicts:    conflicts,
-		Obsoletes:    obsoletes,
-		Changelogs:   changelogs,
-		Raw:          raw,
+		ArchiveSize:   uint64(archiveSize),
+		Checksum:      checksum,
+		Location:      location,
+		Files:         files,
+		Provides:      provides,
+		Requires:      requires,
+		Conflicts:     conflicts,
+		Obsoletes:     obsoletes,
+		Changelogs:    changelogs,
+		Raw:           raw,
 	}, nil
 }
 
@@ -480,21 +481,21 @@ func makeMetadataFile(kind string, xmlData []byte) (*MetadataFile, error) {
 func generatePrimaryXML(packages []RpmPackage) string {
 	var out strings.Builder
 	out.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	out.WriteString(fmt.Sprintf("<metadata xmlns=\"http://linux.duke.edu/metadata/common\" xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\" packages=\"%d\">\n", len(packages)))
+	fmt.Fprintf(&out, "<metadata xmlns=\"http://linux.duke.edu/metadata/common\" xmlns:rpm=\"http://linux.duke.edu/metadata/rpm\" packages=\"%d\">\n", len(packages))
 
 	for _, p := range packages {
 		out.WriteString("<package type=\"rpm\">")
 		tag(&out, "name", p.Name)
 		tag(&out, "arch", p.Arch)
-		out.WriteString(fmt.Sprintf("<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release)))
-		out.WriteString(fmt.Sprintf("<checksum type=\"sha256\" pkgid=\"YES\">%s</checksum>", p.Checksum))
+		fmt.Fprintf(&out, "<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release))
+		fmt.Fprintf(&out, "<checksum type=\"sha256\" pkgid=\"YES\">%s</checksum>", p.Checksum)
 		tag(&out, "summary", p.Summary)
 		tag(&out, "description", p.Description)
 		tag(&out, "packager", "")
 		tag(&out, "url", p.URL)
-		out.WriteString(fmt.Sprintf("<time file=\"%d\" build=\"%d\"/>", time.Now().Unix(), p.BuildTime))
-		out.WriteString(fmt.Sprintf("<size package=\"%d\" installed=\"%d\" archive=\"%d\"/>", p.PackageSize, p.InstalledSize, p.ArchiveSize))
-		out.WriteString(fmt.Sprintf("<location href=\"%s\"/>", xmlEscape(p.Location)))
+		fmt.Fprintf(&out, "<time file=\"%d\" build=\"%d\"/>", time.Now().Unix(), p.BuildTime)
+		fmt.Fprintf(&out, "<size package=\"%d\" installed=\"%d\" archive=\"%d\"/>", p.PackageSize, p.InstalledSize, p.ArchiveSize)
+		fmt.Fprintf(&out, "<location href=\"%s\"/>", xmlEscape(p.Location))
 		out.WriteString("<format>")
 		rpmTag(&out, "license", p.License)
 		rpmTag(&out, "vendor", p.Vendor)
@@ -520,17 +521,18 @@ func generatePrimaryXML(packages []RpmPackage) string {
 func generateFilelistsXML(packages []RpmPackage) string {
 	var out strings.Builder
 	out.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	out.WriteString(fmt.Sprintf("<filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"%d\">\n", len(packages)))
+	fmt.Fprintf(&out, "<filelists xmlns=\"http://linux.duke.edu/metadata/filelists\" packages=\"%d\">\n", len(packages))
 
 	for _, p := range packages {
-		out.WriteString(fmt.Sprintf("<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">", p.Checksum, xmlEscape(p.Name), xmlEscape(p.Arch)))
-		out.WriteString(fmt.Sprintf("<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release)))
+		fmt.Fprintf(&out, "<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">", p.Checksum, xmlEscape(p.Name), xmlEscape(p.Arch))
+		fmt.Fprintf(&out, "<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release))
 		for _, f := range p.Files {
-			if f.Kind == "dir" {
-				out.WriteString(fmt.Sprintf("<file type=\"dir\">%s</file>", xmlEscape(f.Path)))
-			} else if f.Kind == "ghost" {
-				out.WriteString(fmt.Sprintf("<file type=\"ghost\">%s</file>", xmlEscape(f.Path)))
-			} else {
+			switch f.Kind {
+			case "dir":
+				fmt.Fprintf(&out, "<file type=\"dir\">%s</file>", xmlEscape(f.Path))
+			case "ghost":
+				fmt.Fprintf(&out, "<file type=\"ghost\">%s</file>", xmlEscape(f.Path))
+			default:
 				tag(&out, "file", f.Path)
 			}
 		}
@@ -543,13 +545,13 @@ func generateFilelistsXML(packages []RpmPackage) string {
 func generateOtherXML(packages []RpmPackage) string {
 	var out strings.Builder
 	out.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	out.WriteString(fmt.Sprintf("<otherdata xmlns=\"http://linux.duke.edu/metadata/other\" packages=\"%d\">\n", len(packages)))
+	fmt.Fprintf(&out, "<otherdata xmlns=\"http://linux.duke.edu/metadata/other\" packages=\"%d\">\n", len(packages))
 
 	for _, p := range packages {
-		out.WriteString(fmt.Sprintf("<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">", p.Checksum, xmlEscape(p.Name), xmlEscape(p.Arch)))
-		out.WriteString(fmt.Sprintf("<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release)))
+		fmt.Fprintf(&out, "<package pkgid=\"%s\" name=\"%s\" arch=\"%s\">", p.Checksum, xmlEscape(p.Name), xmlEscape(p.Arch))
+		fmt.Fprintf(&out, "<version epoch=\"%s\" ver=\"%s\" rel=\"%s\"/>", xmlEscape(p.Epoch), xmlEscape(p.Version), xmlEscape(p.Release))
 		for _, c := range p.Changelogs {
-			out.WriteString(fmt.Sprintf("<changelog author=\"%s\" date=\"%d\">%s</changelog>", xmlEscape(c.Author), c.Date, xmlEscape(c.Text)))
+			fmt.Fprintf(&out, "<changelog author=\"%s\" date=\"%d\">%s</changelog>", xmlEscape(c.Author), c.Date, xmlEscape(c.Text))
 		}
 		out.WriteString("</package>")
 	}
@@ -562,17 +564,17 @@ func generateRepomdXML(primary, filelists, other *MetadataFile) string {
 	var out strings.Builder
 	out.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
 	out.WriteString("<repomd xmlns=\"http://linux.duke.edu/metadata/repo\">\n")
-	out.WriteString(fmt.Sprintf("<revision>%d</revision>\n", revision))
+	fmt.Fprintf(&out, "<revision>%d</revision>\n", revision)
 
 	files := []*MetadataFile{primary, filelists, other}
 	for _, file := range files {
-		out.WriteString(fmt.Sprintf("<data type=\"%s\">", file.Kind))
-		out.WriteString(fmt.Sprintf("<checksum type=\"sha256\">%s</checksum>", file.Checksum))
-		out.WriteString(fmt.Sprintf("<open-checksum type=\"sha256\">%s</open-checksum>", file.OpenChecksum))
-		out.WriteString(fmt.Sprintf("<location href=\"repodata/%s\"/>", file.Filename))
-		out.WriteString(fmt.Sprintf("<timestamp>%d</timestamp>", revision))
-		out.WriteString(fmt.Sprintf("<size>%d</size>", file.Size))
-		out.WriteString(fmt.Sprintf("<open-size>%d</open-size>", file.OpenSize))
+		fmt.Fprintf(&out, "<data type=\"%s\">", file.Kind)
+		fmt.Fprintf(&out, "<checksum type=\"sha256\">%s</checksum>", file.Checksum)
+		fmt.Fprintf(&out, "<open-checksum type=\"sha256\">%s</open-checksum>", file.OpenChecksum)
+		fmt.Fprintf(&out, "<location href=\"repodata/%s\"/>", file.Filename)
+		fmt.Fprintf(&out, "<timestamp>%d</timestamp>", revision)
+		fmt.Fprintf(&out, "<size>%d</size>", file.Size)
+		fmt.Fprintf(&out, "<open-size>%d</open-size>", file.OpenSize)
 		out.WriteString("</data>")
 	}
 
@@ -584,36 +586,36 @@ func dependencyBlock(out *strings.Builder, tagName string, dependencies []RpmDep
 	if len(dependencies) == 0 {
 		return
 	}
-	out.WriteString(fmt.Sprintf("<%s>", tagName))
+	fmt.Fprintf(out, "<%s>", tagName)
 	for _, dep := range dependencies {
-		out.WriteString(fmt.Sprintf("<rpm:entry name=\"%s\"", xmlEscape(dep.Name)))
+		fmt.Fprintf(out, "<rpm:entry name=\"%s\"", xmlEscape(dep.Name))
 		if dep.Flags != "" {
-			out.WriteString(fmt.Sprintf(" flags=\"%s\"", xmlEscape(dep.Flags)))
+			fmt.Fprintf(out, " flags=\"%s\"", xmlEscape(dep.Flags))
 		}
 		if dep.Epoch != "" {
-			out.WriteString(fmt.Sprintf(" epoch=\"%s\"", xmlEscape(dep.Epoch)))
+			fmt.Fprintf(out, " epoch=\"%s\"", xmlEscape(dep.Epoch))
 		}
 		if dep.Version != "" {
-			out.WriteString(fmt.Sprintf(" ver=\"%s\"", xmlEscape(dep.Version)))
+			fmt.Fprintf(out, " ver=\"%s\"", xmlEscape(dep.Version))
 		}
 		if dep.Release != "" {
-			out.WriteString(fmt.Sprintf(" rel=\"%s\"", xmlEscape(dep.Release)))
+			fmt.Fprintf(out, " rel=\"%s\"", xmlEscape(dep.Release))
 		}
 		out.WriteString("/>")
 	}
-	out.WriteString(fmt.Sprintf("</%s>", tagName))
+	fmt.Fprintf(out, "</%s>", tagName)
 }
 
 func tag(out *strings.Builder, tagName, value string) {
-	out.WriteString(fmt.Sprintf("<%s>%s</%s>", tagName, xmlEscape(value), tagName))
+	fmt.Fprintf(out, "<%s>%s</%s>", tagName, xmlEscape(value), tagName)
 }
 
 func rpmTag(out *strings.Builder, tagName, value string) {
-	out.WriteString(fmt.Sprintf("<rpm:%s>%s</rpm:%s>", tagName, xmlEscape(value), tagName))
+	fmt.Fprintf(out, "<rpm:%s>%s</rpm:%s>", tagName, xmlEscape(value), tagName)
 }
 
 func xmlEscape(value string) string {
 	var buf bytes.Buffer
-	xml.EscapeText(&buf, []byte(value))
+	_ = xml.EscapeText(&buf, []byte(value))
 	return buf.String()
 }

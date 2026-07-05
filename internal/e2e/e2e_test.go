@@ -304,24 +304,18 @@ func runExec(t *testing.T, ctx context.Context, container testcontainers.Contain
 }
 
 func createMinioBucket(ctx context.Context, endpoint, accessKey, secretKey, bucket string) error {
-	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL:               endpoint,
-			SigningRegion:     "us-east-1",
-			HostnameImmutable: true,
-		}, nil
-	})
-
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion("us-east-1"),
-		config.WithEndpointResolverWithOptions(customResolver),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
 	)
 	if err != nil {
 		return err
 	}
 
-	client := s3.NewFromConfig(awsCfg)
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = true
+	})
 	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	})
@@ -413,13 +407,13 @@ func appendArMember(buf *bytes.Buffer, name string, data []byte) {
 
 func testRpmPackage(arch string) ([]byte, error) {
 	rpm, err := rpmpack.NewRPM(rpmpack.RPMMetaData{
-		Name:    "demo",
-		Version: "1.0.0",
-		Release: "1.el9",
-		Arch:    arch,
-		Summary: "Demo",
+		Name:        "demo",
+		Version:     "1.0.0",
+		Release:     "1.el9",
+		Arch:        arch,
+		Summary:     "Demo",
 		Description: "Demo package",
-		Licence: "MIT",
+		Licence:     "MIT",
 	})
 	if err != nil {
 		return nil, err

@@ -92,7 +92,7 @@ func TestAptWorkflowUploadRemoveAndRotateKeyUsesMemoryStore(t *testing.T) {
 	// Rotate key
 	newKey, err := openpgp.GenerateKeyPair("Hakobin New", "gpg@example.com", "test", 0)
 	require.NoError(t, err)
-	
+
 	oldCert, err := oldKey.PublicKeyCert()
 	require.NoError(t, err)
 	rotatedKeys := openpgp.NewSigningKeys(newKey, []*openpgp.PublicKeyCert{oldCert})

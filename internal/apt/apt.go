@@ -43,28 +43,28 @@ func (r RepositoryPath) PoolPath(pkg string) string {
 }
 
 type PackageEntry struct {
-	Package      string
-	Version      string
-	Architecture string
-	Filename     string
-	Size         uint64
-	MD5sum       string
-	SHA1         string
-	SHA256       string
-	Maintainer   string
-	Description  string
-	Section      string
-	Priority     string
+	Package       string
+	Version       string
+	Architecture  string
+	Filename      string
+	Size          uint64
+	MD5sum        string
+	SHA1          string
+	SHA256        string
+	Maintainer    string
+	Description   string
+	Section       string
+	Priority      string
 	InstalledSize uint64
-	Depends      string
-	Recommends   string
-	Suggests     string
-	Conflicts    string
-	Breaks       string
-	Replaces     string
-	Provides     string
-	Homepage     string
-	Extra        map[string]string
+	Depends       string
+	Recommends    string
+	Suggests      string
+	Conflicts     string
+	Breaks        string
+	Replaces      string
+	Provides      string
+	Homepage      string
+	Extra         map[string]string
 }
 
 func PackageEntryFromFields(fields map[string]string) (*PackageEntry, error) {
@@ -142,28 +142,28 @@ func PackageEntryFromFields(fields map[string]string) (*PackageEntry, error) {
 	}
 
 	return &PackageEntry{
-		Package:      pkg,
-		Version:      version,
-		Architecture: arch,
-		Filename:     filename,
-		Size:         size,
-		MD5sum:       md5sum,
-		SHA1:         sha1Val,
-		SHA256:       sha256Val,
-		Maintainer:   fields["Maintainer"],
-		Description:  fields["Description"],
-		Section:      fields["Section"],
-		Priority:     fields["Priority"],
+		Package:       pkg,
+		Version:       version,
+		Architecture:  arch,
+		Filename:      filename,
+		Size:          size,
+		MD5sum:        md5sum,
+		SHA1:          sha1Val,
+		SHA256:        sha256Val,
+		Maintainer:    fields["Maintainer"],
+		Description:   fields["Description"],
+		Section:       fields["Section"],
+		Priority:      fields["Priority"],
 		InstalledSize: instSize,
-		Depends:      fields["Depends"],
-		Recommends:   fields["Recommends"],
-		Suggests:     fields["Suggests"],
-		Conflicts:    fields["Conflicts"],
-		Breaks:       fields["Breaks"],
-		Replaces:     fields["Replaces"],
-		Provides:     fields["Provides"],
-		Homepage:     fields["Homepage"],
-		Extra:        extra,
+		Depends:       fields["Depends"],
+		Recommends:    fields["Recommends"],
+		Suggests:      fields["Suggests"],
+		Conflicts:     fields["Conflicts"],
+		Breaks:        fields["Breaks"],
+		Replaces:      fields["Replaces"],
+		Provides:      fields["Provides"],
+		Homepage:      fields["Homepage"],
+		Extra:         extra,
 	}, nil
 }
 
@@ -188,27 +188,27 @@ type ReleaseFile struct {
 
 func (r *ReleaseFile) Generate() []byte {
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("Origin: %s\n", defaulted(r.Origin, "APT S3 Repository")))
-	out.WriteString(fmt.Sprintf("Label: %s\n", defaulted(r.Label, "APT S3 Repository")))
-	out.WriteString(fmt.Sprintf("Suite: %s\n", r.Distribution))
-	out.WriteString(fmt.Sprintf("Codename: %s\n", r.Distribution))
-	out.WriteString(fmt.Sprintf("Date: %s\n", r.Date.UTC().Format("Mon, 02 Jan 2006 15:04:05 UTC")))
-	out.WriteString(fmt.Sprintf("Architectures: %s\n", strings.Join(r.Architectures, " ")))
-	out.WriteString(fmt.Sprintf("Components: %s\n", strings.Join(r.Components, " ")))
-	out.WriteString(fmt.Sprintf("Description: %s\n", defaulted(r.Description, "APT repository hosted on S3")))
+	fmt.Fprintf(&out, "Origin: %s\n", defaulted(r.Origin, "APT S3 Repository"))
+	fmt.Fprintf(&out, "Label: %s\n", defaulted(r.Label, "APT S3 Repository"))
+	fmt.Fprintf(&out, "Suite: %s\n", r.Distribution)
+	fmt.Fprintf(&out, "Codename: %s\n", r.Distribution)
+	fmt.Fprintf(&out, "Date: %s\n", r.Date.UTC().Format("Mon, 02 Jan 2006 15:04:05 UTC"))
+	fmt.Fprintf(&out, "Architectures: %s\n", strings.Join(r.Architectures, " "))
+	fmt.Fprintf(&out, "Components: %s\n", strings.Join(r.Components, " "))
+	fmt.Fprintf(&out, "Description: %s\n", defaulted(r.Description, "APT repository hosted on S3"))
 
 	if len(r.Files) > 0 {
 		out.WriteString("MD5Sum:\n")
 		for _, f := range r.Files {
-			out.WriteString(fmt.Sprintf(" %s %16d %s\n", f.MD5, f.Size, f.Filename))
+			fmt.Fprintf(&out, " %s %16d %s\n", f.MD5, f.Size, f.Filename)
 		}
 		out.WriteString("SHA1:\n")
 		for _, f := range r.Files {
-			out.WriteString(fmt.Sprintf(" %s %16d %s\n", f.SHA1, f.Size, f.Filename))
+			fmt.Fprintf(&out, " %s %16d %s\n", f.SHA1, f.Size, f.Filename)
 		}
 		out.WriteString("SHA256:\n")
 		for _, f := range r.Files {
-			out.WriteString(fmt.Sprintf(" %s %16d %s\n", f.SHA256, f.Size, f.Filename))
+			fmt.Fprintf(&out, " %s %16d %s\n", f.SHA256, f.Size, f.Filename)
 		}
 	}
 

@@ -820,7 +820,7 @@ func (rm *RepositoryManager) createSetupScript(ctx context.Context, metadata *Re
 	repoID := repositoryIdentifier(metadata, rm.cfg.S3BucketName)
 
 	var script strings.Builder
-	script.WriteString(fmt.Sprintf(`#!/bin/bash
+	fmt.Fprintf(&script, `#!/bin/bash
 set -e
 
 # APT Repository Setup Script
@@ -849,15 +849,15 @@ echo "Adding repository to APT sources..."
 cat > /etc/apt/sources.list.d/%s.list << 'EOF'
 # %s - %s
 # Repository setup: %s
-`, metadata.Label, metadata.Origin, metadata.Description, baseURL, repoID, repoID, repoID, metadata.Label, metadata.Origin, baseURL))
+`, metadata.Label, metadata.Origin, metadata.Description, baseURL, repoID, repoID, repoID, metadata.Label, metadata.Origin, baseURL)
 
 	for _, dist := range metadata.Distributions {
 		for _, comp := range metadata.Components {
-			script.WriteString(fmt.Sprintf("deb [signed-by=/etc/apt/keyrings/%s.gpg] %s %s %s\n", repoID, baseURL, dist, comp))
+			fmt.Fprintf(&script, "deb [signed-by=/etc/apt/keyrings/%s.gpg] %s %s %s\n", repoID, baseURL, dist, comp)
 		}
 	}
 
-	script.WriteString(fmt.Sprintf(`EOF
+	fmt.Fprintf(&script, `EOF
 
 # Update package lists
 echo "Updating package lists..."
@@ -878,10 +878,10 @@ echo "Repository GPG Key ID: %s"
 		strings.Join(metadata.Components, ", "),
 		strings.Join(metadata.Architectures, ", "),
 		keyPair.KeyID,
-	))
+	)
 
 	if keyPair.Expiration != nil {
-		script.WriteString(fmt.Sprintf("echo \"GPG Key Expires: %s\"\n", keyPair.Expiration.Format("2006-01-02")))
+		fmt.Fprintf(&script, "echo \"GPG Key Expires: %s\"\n", keyPair.Expiration.Format("2006-01-02"))
 	} else {
 		script.WriteString("echo \"GPG Key Expires: Never\"\n")
 	}
