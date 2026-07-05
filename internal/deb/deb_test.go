@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,52 @@ func TestParsesGzippedControlTar(t *testing.T) {
 	genFilename, err := pkg.GeneratedFilename()
 	require.NoError(t, err)
 	assert.Equal(t, "demo_1.0.0_amd64.deb", genFilename)
+}
+
+func TestRejectsPathTraversalInControlFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		control []byte
+	}{
+		{"package", []byte("Package: ../../etc\nVersion: 1.0.0\nArchitecture: amd64\n")},
+		{"version", []byte("Package: demo\nVersion: 1.0/../../evil\nArchitecture: amd64\n")},
+		{"architecture", []byte("Package: demo\nVersion: 1.0.0\nArchitecture: ../all\n")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pkg, err := Parse("demo.deb", testDeb(tc.control))
+			require.NoError(t, err)
+			_, err = pkg.GeneratedFilename()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestPackageEntryFoldsInjectedNewlines(t *testing.T) {
+	// A crafted control value with a bare newline must not be able to forge a
+	// new field or a package stanza boundary in the Packages index.
+	control := []byte("Package: demo\nVersion: 1.0.0\nArchitecture: amd64\n" +
+		"Maintainer: evil\nFilename: pool/hacked.deb\n")
+	pkg, err := Parse("demo.deb", testDeb(control))
+	require.NoError(t, err)
+
+	// Inject a malicious multi-line value directly into the control map to
+	// simulate a value the parser folded; every continuation must stay folded.
+	pkg.Control["Maintainer"] = "evil\nFilename: pool/hacked.deb"
+
+	entry := pkg.PackageEntry("pool/m/demo/demo_1.0.0_amd64.deb")
+
+	// Exactly one real (unfolded, start-of-line) Filename field: the pool path.
+	unfoldedFilename := 0
+	for _, line := range strings.Split(entry, "\n") {
+		if strings.HasPrefix(line, "Filename: ") {
+			unfoldedFilename++
+		}
+	}
+	assert.Equal(t, 1, unfoldedFilename)
+	assert.Contains(t, entry, "Filename: pool/m/demo/demo_1.0.0_amd64.deb")
+	// The injected line must have been folded into a continuation (leading space).
+	assert.Contains(t, entry, "\n Filename: pool/hacked.deb")
 }
 
 func testDeb(control []byte) []byte {

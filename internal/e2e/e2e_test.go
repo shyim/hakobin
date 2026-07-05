@@ -147,7 +147,8 @@ func TestE2EWorkflow(t *testing.T) {
 		err := manager.Init(ctx, initReq)
 		require.NoError(t, err)
 
-		signingKeys := openpgp.LoadSigningKeys([]string{"signing-key.gpg"}, nil)
+		signingKeys, err := openpgp.LoadSigningKeys([]string{"signing-key.gpg"}, nil)
+		require.NoError(t, err)
 		require.NotNil(t, signingKeys.Active)
 
 		// 2. Generate package with file content & Upload
@@ -219,7 +220,8 @@ func TestE2EWorkflow(t *testing.T) {
 		err := manager.Init(ctx, initReq)
 		require.NoError(t, err)
 
-		signingKeys := openpgp.LoadSigningKeys([]string{"signing-key.gpg"}, nil)
+		signingKeys, err := openpgp.LoadSigningKeys([]string{"signing-key.gpg"}, nil)
+		require.NoError(t, err)
 
 		// 2. Generate package & Upload
 		rpmBytes, err := testRpmPackage(nativeRpmArch)

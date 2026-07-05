@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/olekukonko/tablewriter"
 
 	"hakobin/internal/apt"
@@ -24,6 +25,10 @@ import (
 const (
 	DebPrefix    = "deb"
 	MetadataPath = "apt-repo.json"
+	// LockPath is the repository-scoped lock object guarding metadata mutations.
+	LockPath = ".hakobin.lock"
+	// lockTTLSeconds bounds how long a crashed uploader can block others.
+	lockTTLSeconds = 300
 )
 
 type RepoMetadata struct {
@@ -176,7 +181,12 @@ func (rm *RepositoryManager) Upload(ctx context.Context, req *UploadRequest) err
 			return fmt.Errorf("file not found: %s", f)
 		}
 	}
+	return rm.withLock(ctx, func() error {
+		return rm.upload(ctx, req)
+	})
+}
 
+func (rm *RepositoryManager) upload(ctx context.Context, req *UploadRequest) error {
 	bucket, err := rm.cfg.Bucket()
 	if err != nil {
 		return err
@@ -359,6 +369,12 @@ func (rm *RepositoryManager) ListPackages(ctx context.Context, distribution, com
 }
 
 func (rm *RepositoryManager) Remove(ctx context.Context, req *RemoveRequest) error {
+	return rm.withLock(ctx, func() error {
+		return rm.remove(ctx, req)
+	})
+}
+
+func (rm *RepositoryManager) remove(ctx context.Context, req *RemoveRequest) error {
 	metadata, err := rm.loadMetadata(ctx)
 	if err != nil {
 		return err
@@ -401,33 +417,23 @@ func (rm *RepositoryManager) Remove(ctx context.Context, req *RemoveRequest) err
 		}
 	}
 
-	if err := rm.store.Delete(ctx, rm.key(poolPath)); err != nil {
+	// An "all" package lives in every concrete architecture's index; a concrete
+	// package lives only in its own. Rewrite the indexes BEFORE deleting the
+	// pool blob so a failure never leaves a dangling reference (Packages listing
+	// a .deb that no longer exists → apt 404).
+	targetArches, err := rm.targetArchitectures(req.Architecture, metadata)
+	if err != nil {
 		return err
 	}
 
-	packagesPath := repo.PackagesPath()
-	existsPackages, err := rm.store.Exists(ctx, rm.key(packagesPath))
-	if err == nil && existsPackages {
-		data, err := rm.store.Download(ctx, rm.key(packagesPath))
-		if err == nil {
-			packages, err := apt.ParsePackages(string(data))
-			if err == nil {
-				var filtered []apt.PackageEntry
-				for _, p := range packages {
-					if p.Package == req.Package && p.Version == req.Version && p.Architecture == req.Architecture {
-						continue
-					}
-					filtered = append(filtered, p)
-				}
-
-				updated := apt.GeneratePackagesContent(filtered)
-				_ = rm.store.UploadBytes(ctx, rm.key(packagesPath), []byte(updated), "text/plain")
-
-				gzBytes, err := apt.CompressGzip([]byte(updated))
-				if err == nil {
-					_ = rm.store.UploadBytes(ctx, rm.key(repo.PackagesGzPath()), gzBytes, "application/gzip")
-				}
-			}
+	for _, targetArch := range targetArches {
+		indexRepo := apt.RepositoryPath{
+			Distribution: req.Distribution,
+			Component:    req.Component,
+			Architecture: targetArch,
+		}
+		if err := rm.removeFromPackagesIndex(ctx, indexRepo, req); err != nil {
+			return err
 		}
 	}
 
@@ -435,11 +441,64 @@ func (rm *RepositoryManager) Remove(ctx context.Context, req *RemoveRequest) err
 		return err
 	}
 
+	if err := rm.store.Delete(ctx, rm.key(poolPath)); err != nil {
+		return err
+	}
+
 	fmt.Println("Package removed successfully!")
 	return nil
 }
 
+// removeFromPackagesIndex rewrites a single binary-<arch> Packages index with
+// the matching package stanza filtered out. Unlike the previous implementation,
+// upload errors are propagated rather than swallowed.
+func (rm *RepositoryManager) removeFromPackagesIndex(ctx context.Context, repo apt.RepositoryPath, req *RemoveRequest) error {
+	packagesPath := repo.PackagesPath()
+	existsPackages, err := rm.store.Exists(ctx, rm.key(packagesPath))
+	if err != nil {
+		return err
+	}
+	if !existsPackages {
+		return nil
+	}
+
+	data, err := rm.store.Download(ctx, rm.key(packagesPath))
+	if err != nil {
+		return err
+	}
+
+	packages, err := apt.ParsePackages(string(data))
+	if err != nil {
+		return err
+	}
+
+	var filtered []apt.PackageEntry
+	for _, p := range packages {
+		if p.Package == req.Package && p.Version == req.Version && p.Architecture == req.Architecture {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	updated := apt.GeneratePackagesContent(filtered)
+	if err := rm.store.UploadBytes(ctx, rm.key(packagesPath), []byte(updated), "text/plain"); err != nil {
+		return err
+	}
+
+	gzBytes, err := apt.CompressGzip([]byte(updated))
+	if err != nil {
+		return err
+	}
+	return rm.store.UploadBytes(ctx, rm.key(repo.PackagesGzPath()), gzBytes, "application/gzip")
+}
+
 func (rm *RepositoryManager) RotateKey(ctx context.Context, signingKeys *openpgp.SigningKeys) error {
+	return rm.withLock(ctx, func() error {
+		return rm.rotateKey(ctx, signingKeys)
+	})
+}
+
+func (rm *RepositoryManager) rotateKey(ctx context.Context, signingKeys *openpgp.SigningKeys) error {
 	metadata, err := rm.loadMetadata(ctx)
 	if err != nil {
 		return err
@@ -516,19 +575,46 @@ func (rm *RepositoryManager) uploadOne(ctx context.Context, filePath string, req
 		}
 	}
 
-	repo := apt.RepositoryPath{
+	// The pool path is architecture-independent (keyed by component + package).
+	poolRepo := apt.RepositoryPath{
 		Distribution: req.Distribution,
 		Component:    req.Component,
 		Architecture: architecture,
 	}
+	poolPath := fmt.Sprintf("%s/%s", poolRepo.PoolPath(packageName), filename)
 
-	poolPath := fmt.Sprintf("%s/%s", repo.PoolPath(packageName), filename)
+	// Determine which binary-<arch> indexes this package belongs in. A concrete
+	// architecture goes into its own index; an "all" package must appear in
+	// every concrete architecture's index so apt clients configured for a
+	// specific arch can see it.
+	var fallbackMetadata RepoMetadata
+	releaseMetadata := metadata
+	if releaseMetadata == nil {
+		fallbackMetadata = RepoMetadata{
+			Distributions: []string{req.Distribution},
+			Components:    []string{req.Component},
+			Architectures: []string{architecture},
+		}
+		releaseMetadata = &fallbackMetadata
+	}
 
-	exists, err := rm.packageExists(ctx, &repo, packageName, version, architecture)
+	targetArches, err := rm.targetArchitectures(architecture, releaseMetadata)
 	if err != nil {
 		return "", err
 	}
 
+	// Existence is checked against the first target index; if the package is
+	// already present there it is present in all of them (they are written
+	// together), so a single check preserves the previous skip/force semantics.
+	probeRepo := apt.RepositoryPath{
+		Distribution: req.Distribution,
+		Component:    req.Component,
+		Architecture: targetArches[0],
+	}
+	exists, err := rm.packageExists(ctx, &probeRepo, packageName, version, architecture)
+	if err != nil {
+		return "", err
+	}
 	if exists {
 		if req.Force {
 			fmt.Println("  Force uploading (overwriting existing package)")
@@ -542,6 +628,49 @@ func (rm *RepositoryManager) uploadOne(ctx context.Context, filePath string, req
 		return "", err
 	}
 
+	entry := pkg.PackageEntry(poolPath)
+	for _, targetArch := range targetArches {
+		indexRepo := apt.RepositoryPath{
+			Distribution: req.Distribution,
+			Component:    req.Component,
+			Architecture: targetArch,
+		}
+		if err := rm.appendToPackagesIndex(ctx, indexRepo, entry); err != nil {
+			return "", err
+		}
+	}
+
+	err = rm.updateRelease(ctx, req.Distribution, releaseMetadata, req.SigningKeys)
+	if err != nil {
+		return "", err
+	}
+
+	return uploadOutcomeUploaded, nil
+}
+
+// targetArchitectures returns the concrete architectures whose Packages index a
+// package should be written to. Concrete architectures map to themselves; "all"
+// maps to every concrete architecture the repository declares.
+func (rm *RepositoryManager) targetArchitectures(architecture string, metadata *RepoMetadata) ([]string, error) {
+	if architecture != "all" {
+		return []string{architecture}, nil
+	}
+
+	var concrete []string
+	for _, arch := range metadata.Architectures {
+		if arch != "all" {
+			concrete = append(concrete, arch)
+		}
+	}
+	if len(concrete) == 0 {
+		return nil, fmt.Errorf("cannot upload architecture-independent (all) package: repository has no concrete architectures yet; upload an arch-specific package or run 'deb init' with architectures first")
+	}
+	return concrete, nil
+}
+
+// appendToPackagesIndex downloads the existing Packages index for a repository
+// path, appends a package stanza, and writes both the plain and gzip variants.
+func (rm *RepositoryManager) appendToPackagesIndex(ctx context.Context, repo apt.RepositoryPath, entry string) error {
 	packagesPath := repo.PackagesPath()
 	var existing string
 	pkgExists, err := rm.store.Exists(ctx, rm.key(packagesPath))
@@ -560,46 +689,21 @@ func (rm *RepositoryManager) uploadOne(ctx context.Context, filePath string, req
 		}
 	}
 
-	existing += pkg.PackageEntry(poolPath)
+	existing += entry
 	if !strings.HasSuffix(existing, "\n\n") {
 		existing += "\n"
 	}
 
-	err = rm.store.UploadBytes(ctx, rm.key(packagesPath), []byte(existing), "text/plain")
-	if err != nil {
-		return "", err
+	if err := rm.store.UploadBytes(ctx, rm.key(packagesPath), []byte(existing), "text/plain"); err != nil {
+		return err
 	}
 
 	gzBytes, err := apt.CompressGzip([]byte(existing))
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	err = rm.store.UploadBytes(ctx, rm.key(repo.PackagesGzPath()), gzBytes, "application/gzip")
-	if err != nil {
-		return "", err
-	}
-
-	var fallbackMetadata RepoMetadata
-	releaseMetadata := metadata
-	if releaseMetadata == nil {
-		fallbackMetadata = RepoMetadata{
-			Origin:        "",
-			Label:         "",
-			Description:   "",
-			Distributions: []string{req.Distribution},
-			Components:    []string{req.Component},
-			Architectures: []string{architecture},
-		}
-		releaseMetadata = &fallbackMetadata
-	}
-
-	err = rm.updateRelease(ctx, req.Distribution, releaseMetadata, req.SigningKeys)
-	if err != nil {
-		return "", err
-	}
-
-	return uploadOutcomeUploaded, nil
+	return rm.store.UploadBytes(ctx, rm.key(repo.PackagesGzPath()), gzBytes, "application/gzip")
 }
 
 func (rm *RepositoryManager) createInitialIndexes(ctx context.Context, metadata *RepoMetadata, signingKeys *openpgp.SigningKeys) error {
@@ -936,6 +1040,22 @@ func (rm *RepositoryManager) saveMetadata(ctx context.Context, metadata *RepoMet
 
 func (rm *RepositoryManager) key(path string) string {
 	return fmt.Sprintf("%s/%s", DebPrefix, strings.TrimPrefix(path, "/"))
+}
+
+// withLock runs fn while holding the repository-scoped lock, serializing
+// metadata mutations so concurrent uploads/removes cannot lose updates.
+func (rm *RepositoryManager) withLock(ctx context.Context, fn func() error) error {
+	owner := uuid.NewString()
+	lock, err := rm.store.AcquireLock(ctx, rm.key(LockPath), owner, lockTTLSeconds, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if relErr := rm.store.ReleaseLock(ctx, lock); relErr != nil {
+			fmt.Printf("Warning: failed to release repository lock: %v\n", relErr)
+		}
+	}()
+	return fn()
 }
 
 func (rm *RepositoryManager) debBaseURL() (string, error) {

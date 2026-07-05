@@ -136,7 +136,10 @@ var debUploadCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
 		manager := repository.NewRepositoryManager(cfg, store)
 
 		req := &repository.UploadRequest{
@@ -144,7 +147,7 @@ var debUploadCmd = &cobra.Command{
 			Distribution: debUploadDist,
 			Component:    debUploadComp,
 			Force:        debUploadForce,
-			SigningKeys:  signingKeys,
+			SigningKeys:  keys,
 		}
 
 		return manager.Upload(ctx, req)
@@ -218,7 +221,10 @@ var debRemoveCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
 		manager := repository.NewRepositoryManager(cfg, store)
 
 		req := &repository.RemoveRequest{
@@ -228,7 +234,7 @@ var debRemoveCmd = &cobra.Command{
 			Distribution: debRemoveDist,
 			Component:    debRemoveComp,
 			Force:        debRemoveForce,
-			SigningKeys:  signingKeys,
+			SigningKeys:  keys,
 		}
 
 		return manager.Remove(ctx, req)
@@ -253,13 +259,16 @@ var debRotateKeyCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
-		if signingKeys.Active == nil {
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
+		if keys.Active == nil {
 			return fmt.Errorf("rotate-key requires an active private signing key from GPG_PRIVATE_KEY, --signing-key, or ./signing-key.gpg")
 		}
 
 		manager := repository.NewRepositoryManager(cfg, store)
-		return manager.RotateKey(ctx, signingKeys)
+		return manager.RotateKey(ctx, keys)
 	},
 }
 

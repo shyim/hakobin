@@ -146,7 +146,46 @@ func LoadKeyPairFromArmored(data string) (*KeyPair, error) {
 	if len(entityList) == 0 {
 		return nil, fmt.Errorf("no keys found in private key block")
 	}
-	return NewKeyPair(entityList[0])
+
+	entity := entityList[0]
+	if err := decryptPrivateKey(entity); err != nil {
+		return nil, err
+	}
+
+	return NewKeyPair(entity)
+}
+
+// decryptPrivateKey decrypts an encrypted (passphrase-protected) private key
+// in place using the GPG_PASSPHRASE environment variable. An encrypted key that
+// is left encrypted cannot sign, so this fails loudly rather than producing
+// unsigned or corrupt artifacts later.
+func decryptPrivateKey(entity *openpgp.Entity) error {
+	if entity.PrivateKey == nil {
+		return fmt.Errorf("key does not contain a private key")
+	}
+
+	if !entity.PrivateKey.Encrypted {
+		return nil
+	}
+
+	passphrase := os.Getenv("GPG_PASSPHRASE")
+	if passphrase == "" {
+		return fmt.Errorf("signing key is passphrase-protected; set GPG_PASSPHRASE to unlock it")
+	}
+
+	pw := []byte(passphrase)
+	if err := entity.PrivateKey.Decrypt(pw); err != nil {
+		return fmt.Errorf("failed to decrypt signing key with GPG_PASSPHRASE: %w", err)
+	}
+	for _, sub := range entity.Subkeys {
+		if sub.PrivateKey != nil && sub.PrivateKey.Encrypted {
+			if err := sub.PrivateKey.Decrypt(pw); err != nil {
+				return fmt.Errorf("failed to decrypt signing subkey with GPG_PASSPHRASE: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (k *KeyPair) SavePrivateKey(path string) error {
@@ -219,7 +258,9 @@ func LoadPublicKeyCerts(path string) ([]*PublicKeyCert, error) {
 
 func ParsePublicKeyCerts(data []byte) ([]*PublicKeyCert, error) {
 	var entityList openpgp.EntityList
-	if bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+	isArmored := bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) ||
+		bytes.Contains(data, []byte("-----BEGIN PGP PRIVATE KEY BLOCK-----"))
+	if isArmored {
 		r := bytes.NewReader(data)
 		for {
 			block, err := armor.Decode(r)
@@ -229,7 +270,10 @@ func ParsePublicKeyCerts(data []byte) ([]*PublicKeyCert, error) {
 			if err != nil {
 				return nil, err
 			}
-			if block.Type != openpgp.PublicKeyType {
+			// Accept both public and private key blocks. A --signing-key file
+			// used as a trusted rotation key contains a private block; we only
+			// publish its public cert, so a private block must not be dropped.
+			if block.Type != openpgp.PublicKeyType && block.Type != openpgp.PrivateKeyType {
 				continue
 			}
 			subList, err := openpgp.ReadKeyRing(block.Body)

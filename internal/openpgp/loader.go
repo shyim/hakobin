@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func LoadSigningKeys(signingPaths, trustedPaths []string) *SigningKeys {
+func LoadSigningKeys(signingPaths, trustedPaths []string) (*SigningKeys, error) {
 	envKey := strings.TrimSpace(os.Getenv("GPG_PRIVATE_KEY"))
 	envKeyPresent := envKey != ""
 	var activeSource string
@@ -17,14 +17,14 @@ func LoadSigningKeys(signingPaths, trustedPaths []string) *SigningKeys {
 	if envKeyPresent {
 		kp, err := LoadKeyPairFromArmored(envKey)
 		if err != nil {
-			fmt.Printf("Warning: Failed to load signing key: %v\n", err)
-		} else {
-			activeSource = "environment variable"
-			active = kp
+			return nil, fmt.Errorf("failed to load signing key from GPG_PRIVATE_KEY: %w", err)
 		}
+		activeSource = "environment variable"
+		active = kp
 	} else {
 		var activePath string
-		if len(signingPaths) > 0 {
+		explicit := len(signingPaths) > 0
+		if explicit {
 			activePath = signingPaths[0]
 		} else {
 			cwd, err := os.Getwd()
@@ -34,14 +34,19 @@ func LoadSigningKeys(signingPaths, trustedPaths []string) *SigningKeys {
 		}
 
 		if activePath != "" {
-			if _, err := os.Stat(activePath); err == nil {
+			_, statErr := os.Stat(activePath)
+			switch {
+			case statErr == nil:
 				kp, err := LoadKeyPairFromPath(activePath)
 				if err != nil {
-					fmt.Printf("Warning: Failed to load signing key: %v\n", err)
-				} else {
-					activeSource = fmt.Sprintf("file %s", activePath)
-					active = kp
+					return nil, fmt.Errorf("failed to load signing key %s: %w", activePath, err)
 				}
+				activeSource = fmt.Sprintf("file %s", activePath)
+				active = kp
+			case explicit:
+				// An explicit --signing-key that does not exist is an error;
+				// falling through would silently publish unsigned artifacts.
+				return nil, fmt.Errorf("signing key not found: %s", activePath)
 			}
 		}
 	}
@@ -60,15 +65,14 @@ func LoadSigningKeys(signingPaths, trustedPaths []string) *SigningKeys {
 	for _, path := range allTrustedPaths {
 		certs, err := LoadPublicKeyCerts(path)
 		if err != nil {
-			fmt.Printf("Warning: Failed to load trusted signing key %s: %v\n", path, err)
-		} else {
-			trusted = append(trusted, certs...)
+			return nil, fmt.Errorf("failed to load trusted signing key %s: %w", path, err)
 		}
+		trusted = append(trusted, certs...)
 	}
 
 	signingKeys := NewSigningKeys(active, trusted)
 	PrintSigningKeyStatus(signingKeys, activeSource)
-	return signingKeys
+	return signingKeys, nil
 }
 
 func PrintSigningKeyStatus(signingKeys *SigningKeys, activeSource string) {

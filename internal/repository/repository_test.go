@@ -118,6 +118,81 @@ func TestAptWorkflowUploadRemoveAndRotateKeyUsesMemoryStore(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
+	cfg := &config.Config{
+		S3AccessKeyID:     "test-access-key",
+		S3SecretAccessKey: "test-secret-key",
+		S3BucketName:      "test-bucket",
+		S3Region:          "us-east-1",
+		S3UsePathStyle:    true,
+		PublicURL:         "https://packages.example.test",
+	}
+
+	store := storage.NewMemoryStore()
+	manager := NewRepositoryManager(cfg, store)
+
+	key, err := openpgp.GenerateKeyPair("Hakobin", "gpg@example.com", "test", 0)
+	require.NoError(t, err)
+	keys := openpgp.NewSigningKeys(key, nil)
+
+	ctx := context.Background()
+	require.NoError(t, manager.Init(ctx, &InitRequest{
+		Metadata: RepoMetadata{
+			Distributions: []string{"stable"},
+			Components:    []string{"main"},
+			Architectures: []string{"amd64", "arm64", "all"},
+		},
+		KeyName:  "GPG Key",
+		KeyEmail: "gpg@example.com",
+	}))
+
+	controlData := []byte("Package: docs\nVersion: 2.0.0\nArchitecture: all\nDescription: Arch-independent package\n")
+	tempDeb, err := os.CreateTemp("", "docs-*.deb")
+	require.NoError(t, err)
+	defer os.Remove(tempDeb.Name())
+	_, err = tempDeb.Write(testDeb(controlData))
+	require.NoError(t, err)
+	tempDeb.Close()
+
+	require.NoError(t, manager.Upload(ctx, &UploadRequest{
+		DebFiles:     []string{tempDeb.Name()},
+		Distribution: "stable",
+		Component:    "main",
+		SigningKeys:  keys,
+	}))
+
+	// The all package must appear in every concrete architecture's index so
+	// apt clients configured for a specific arch can see it.
+	for _, arch := range []string{"amd64", "arm64"} {
+		body, ok := store.Body(fmt.Sprintf("deb/dists/stable/main/binary-%s/Packages", arch))
+		require.True(t, ok, "missing Packages index for %s", arch)
+		assert.Contains(t, string(body), "Package: docs", "docs (all) not visible in binary-%s", arch)
+	}
+
+	// The Release file must reference the concrete-arch Packages indexes.
+	release, ok := store.Body("deb/dists/stable/Release")
+	require.True(t, ok)
+	assert.Contains(t, string(release), "main/binary-amd64/Packages")
+	assert.Contains(t, string(release), "main/binary-arm64/Packages")
+
+	// Removal must clear it from all concrete indexes.
+	require.NoError(t, manager.Remove(ctx, &RemoveRequest{
+		Package:      "docs",
+		Version:      "2.0.0",
+		Architecture: "all",
+		Distribution: "stable",
+		Component:    "main",
+		Force:        true,
+		SigningKeys:  keys,
+	}))
+
+	for _, arch := range []string{"amd64", "arm64"} {
+		body, ok := store.Body(fmt.Sprintf("deb/dists/stable/main/binary-%s/Packages", arch))
+		require.True(t, ok)
+		assert.NotContains(t, string(body), "Package: docs", "docs still present in binary-%s after remove", arch)
+	}
+}
+
 func testDeb(control []byte) []byte {
 	controlTar := gzippedControlTar(control)
 	emptyTar := gzippedControlTar([]byte("Package: ignored\n"))

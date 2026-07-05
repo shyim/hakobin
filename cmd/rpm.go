@@ -55,13 +55,16 @@ var rpmInitCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
 		manager := rpm.NewRpmRepositoryManager(cfg, store)
 
 		req := &rpm.RpmInitRequest{
 			Repo:        rpmRepo,
 			Arch:        rpmArch,
-			SigningKeys: signingKeys,
+			SigningKeys: keys,
 		}
 
 		return manager.Init(ctx, req)
@@ -87,7 +90,10 @@ var rpmUploadCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
 		manager := rpm.NewRpmRepositoryManager(cfg, store)
 
 		req := &rpm.RpmUploadRequest{
@@ -95,7 +101,7 @@ var rpmUploadCmd = &cobra.Command{
 			Repo:        rpmRepo,
 			Arch:        rpmArch,
 			Force:       rpmUploadForce,
-			SigningKeys: signingKeys,
+			SigningKeys: keys,
 		}
 
 		return manager.Upload(ctx, req)
@@ -169,7 +175,10 @@ var rpmRemoveCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
 		manager := rpm.NewRpmRepositoryManager(cfg, store)
 
 		req := &rpm.RpmRemoveRequest{
@@ -181,7 +190,7 @@ var rpmRemoveCmd = &cobra.Command{
 			Repo:        rpmRepo,
 			RepoArch:    rpmRemoveRepoArch,
 			Force:       rpmRemoveForce,
-			SigningKeys: signingKeys,
+			SigningKeys: keys,
 		}
 
 		return manager.Remove(ctx, req)
@@ -206,13 +215,16 @@ var rpmRotateKeyCmd = &cobra.Command{
 			return err
 		}
 
-		signingKeys := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
-		if signingKeys.Active == nil {
+		keys, err := openpgp.LoadSigningKeys(signingKeys, trustedKeys)
+		if err != nil {
+			return err
+		}
+		if keys.Active == nil {
 			return fmt.Errorf("rotate-key requires an active private signing key from GPG_PRIVATE_KEY, --signing-key, or ./signing-key.gpg")
 		}
 
 		manager := rpm.NewRpmRepositoryManager(cfg, store)
-		return manager.RotateKey(ctx, signingKeys)
+		return manager.RotateKey(ctx, keys)
 	},
 }
 

@@ -5,15 +5,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/olekukonko/tablewriter"
 
 	"hakobin/internal/cdn"
 	"hakobin/internal/config"
 	"hakobin/internal/openpgp"
 	"hakobin/internal/storage"
+)
+
+const (
+	// rpmLockPath is the lock object guarding RPM metadata mutations.
+	rpmLockPath = "rpm/.hakobin.lock"
+	// rpmLockTTLSeconds bounds how long a crashed operation can block others.
+	rpmLockTTLSeconds = 300
 )
 
 type RpmRepositoryManager struct {
@@ -61,33 +71,46 @@ type RpmRemoveRequest struct {
 }
 
 func (rm *RpmRepositoryManager) Init(ctx context.Context, req *RpmInitRequest) error {
-	bucket, err := rm.cfg.Bucket()
-	if err != nil {
+	if err := validateRepoArch(req.Repo, req.Arch); err != nil {
 		return err
 	}
-	fmt.Printf("Initializing RPM repository '%s' for %s in S3 bucket: %s\n", req.Repo, req.Arch, bucket)
+	return rm.withLock(ctx, func() error {
+		bucket, err := rm.cfg.Bucket()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Initializing RPM repository '%s' for %s in S3 bucket: %s\n", req.Repo, req.Arch, bucket)
 
-	if err := rm.writeMetadata(ctx, req.Repo, req.Arch, nil, req.SigningKeys); err != nil {
-		return err
-	}
+		if err := rm.writeMetadata(ctx, req.Repo, req.Arch, nil, req.SigningKeys); err != nil {
+			return err
+		}
 
-	baseURL, err := rm.cfg.RepositoryBaseURL()
-	if err != nil {
-		return err
-	}
+		baseURL, err := rm.cfg.RepositoryBaseURL()
+		if err != nil {
+			return err
+		}
 
-	fmt.Println("RPM repository initialized successfully.")
-	fmt.Printf("Repository base URL: %s/%s\n", strings.TrimSuffix(baseURL, "/"), rm.repoPrefix(req.Repo, req.Arch))
-	return nil
+		fmt.Println("RPM repository initialized successfully.")
+		fmt.Printf("Repository base URL: %s/%s\n", strings.TrimSuffix(baseURL, "/"), rm.repoPrefix(req.Repo, req.Arch))
+		return nil
+	})
 }
 
 func (rm *RpmRepositoryManager) Upload(ctx context.Context, req *RpmUploadRequest) error {
+	if err := validateRepoArch(req.Repo, req.Arch); err != nil {
+		return err
+	}
 	for _, f := range req.RpmFiles {
 		if _, err := os.Stat(f); os.IsNotExist(err) {
 			return fmt.Errorf("file not found: %s", f)
 		}
 	}
+	return rm.withLock(ctx, func() error {
+		return rm.upload(ctx, req)
+	})
+}
 
+func (rm *RpmRepositoryManager) upload(ctx context.Context, req *RpmUploadRequest) error {
 	bucket, err := rm.cfg.Bucket()
 	if err != nil {
 		return err
@@ -154,6 +177,9 @@ func (rm *RpmRepositoryManager) Upload(ctx context.Context, req *RpmUploadReques
 }
 
 func (rm *RpmRepositoryManager) List(ctx context.Context, req *RpmListRequest) error {
+	if err := validateRepoArch(req.Repo, req.Arch); err != nil {
+		return err
+	}
 	packages, err := rm.loadPackages(ctx, req.Repo, req.Arch)
 	if err != nil {
 		return err
@@ -209,6 +235,15 @@ func (rm *RpmRepositoryManager) List(ctx context.Context, req *RpmListRequest) e
 }
 
 func (rm *RpmRepositoryManager) Remove(ctx context.Context, req *RpmRemoveRequest) error {
+	if err := validateRepoArch(req.Repo, req.RepoArch); err != nil {
+		return err
+	}
+	return rm.withLock(ctx, func() error {
+		return rm.remove(ctx, req)
+	})
+}
+
+func (rm *RpmRepositoryManager) remove(ctx context.Context, req *RpmRemoveRequest) error {
 	packages, err := rm.loadPackages(ctx, req.Repo, req.RepoArch)
 	if err != nil {
 		return err
@@ -269,7 +304,12 @@ func (rm *RpmRepositoryManager) RotateKey(ctx context.Context, signingKeys *open
 	if signingKeys.Active == nil {
 		return fmt.Errorf("rotate-key requires an active private signing key")
 	}
+	return rm.withLock(ctx, func() error {
+		return rm.rotateKey(ctx, signingKeys)
+	})
+}
 
+func (rm *RpmRepositoryManager) rotateKey(ctx context.Context, signingKeys *openpgp.SigningKeys) error {
 	repos, err := rm.discoverRepositories(ctx)
 	if err != nil {
 		return err
@@ -487,10 +527,50 @@ func (rm *RpmRepositoryManager) key(repo, arch, path string) string {
 	return fmt.Sprintf("%s/%s", rm.repoPrefix(repo, arch), strings.TrimPrefix(path, "/"))
 }
 
+// withLock runs fn while holding the RPM repository lock, serializing metadata
+// mutations so concurrent uploads/removes cannot corrupt repodata.
+func (rm *RpmRepositoryManager) withLock(ctx context.Context, fn func() error) error {
+	owner := uuid.NewString()
+	lock, err := rm.store.AcquireLock(ctx, rpmLockPath, owner, rpmLockTTLSeconds, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if relErr := rm.store.ReleaseLock(ctx, lock); relErr != nil {
+			fmt.Printf("Warning: failed to release repository lock: %v\n", relErr)
+		}
+	}()
+	return fn()
+}
+
+// segmentRe matches a single safe path segment for --repo/--arch: no slashes,
+// no dots-only, no path traversal.
+var segmentRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// validateRepoArch rejects --repo/--arch values that could escape the
+// rpm/<repo>/<arch>/ prefix and overwrite other repositories' objects.
+func validateRepoArch(repo, arch string) error {
+	for _, s := range []struct{ name, val string }{{"repo", repo}, {"arch", arch}} {
+		if s.val == "" {
+			return fmt.Errorf("%s must not be empty", s.name)
+		}
+		if s.val == "." || s.val == ".." || !segmentRe.MatchString(s.val) {
+			return fmt.Errorf("invalid %s %q: must be a single path segment", s.name, s.val)
+		}
+	}
+	return nil
+}
+
 func truncate(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	runes := []rune(value)
 	if len(runes) <= max {
 		return value
+	}
+	if max <= 3 {
+		return string(runes[:max])
 	}
 	return string(runes[:max-3]) + "..."
 }

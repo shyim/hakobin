@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -67,10 +68,25 @@ func Parse(filename string, raw []byte) (*DebPackage, error) {
 	}, nil
 }
 
+// packageNameRe matches valid Debian package names: at least two characters,
+// starting alphanumeric, then lowercase letters, digits, '+', '-', '.'.
+var packageNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
+
+// versionRe matches the characters permitted in a Debian version string
+// (epoch, upstream version, and revision). It deliberately excludes path
+// separators and anything that could escape a pool path.
+var versionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+.~:-]*$`)
+
+// archRe matches Debian architecture names such as amd64, arm64, all, i386.
+var archRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 func (d *DebPackage) Package() (string, error) {
 	val, ok := d.Control["Package"]
 	if !ok {
 		return "", fmt.Errorf("package does not specify Package")
+	}
+	if !packageNameRe.MatchString(val) {
+		return "", fmt.Errorf("invalid Package name %q", val)
 	}
 	return val, nil
 }
@@ -80,6 +96,9 @@ func (d *DebPackage) Version() (string, error) {
 	if !ok {
 		return "", fmt.Errorf("package does not specify Version")
 	}
+	if !versionRe.MatchString(val) {
+		return "", fmt.Errorf("invalid Version %q", val)
+	}
 	return val, nil
 }
 
@@ -87,6 +106,9 @@ func (d *DebPackage) Architecture() (string, error) {
 	val, ok := d.Control["Architecture"]
 	if !ok {
 		return "", fmt.Errorf("package does not specify Architecture")
+	}
+	if !archRe.MatchString(val) {
+		return "", fmt.Errorf("invalid Architecture %q", val)
 	}
 	return val, nil
 }
@@ -107,22 +129,66 @@ func (d *DebPackage) GeneratedFilename() (string, error) {
 	return fmt.Sprintf("%s_%s_%s.deb", pkg, ver, arch), nil
 }
 
+// reservedEntryFields are computed by the repository from the artifact itself.
+// A control field in the .deb must never be able to override them, or a crafted
+// package could point apt at an arbitrary file or forge a checksum.
+var reservedEntryFields = map[string]bool{
+	"Filename": true,
+	"Size":     true,
+	"MD5sum":   true,
+	"SHA1":     true,
+	"SHA256":   true,
+}
+
 func (d *DebPackage) PackageEntry(poolPath string) string {
 	var keys []string
 	for k := range d.Control {
+		if reservedEntryFields[k] {
+			continue
+		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
 	var out strings.Builder
 	for _, k := range keys {
-		fmt.Fprintf(&out, "%s: %s\n", k, d.Control[k])
+		fmt.Fprintf(&out, "%s: %s\n", k, foldFieldValue(d.Control[k]))
 	}
 	fmt.Fprintf(&out, "Filename: %s\n", poolPath)
 	fmt.Fprintf(&out, "Size: %d\n", d.Size)
 	fmt.Fprintf(&out, "MD5sum: %s\n", d.MD5)
 	fmt.Fprintf(&out, "SHA1: %s\n", d.SHA1)
 	fmt.Fprintf(&out, "SHA256: %s\n", d.SHA256)
+	return out.String()
+}
+
+// foldFieldValue neutralizes control-field injection: every embedded newline in
+// a field value must be followed by a space or tab (RFC822 continuation) so the
+// value cannot forge a new field or an entire package stanza in the Packages
+// index. A bare newline (or a paragraph break) from a crafted .deb is re-folded
+// into a continuation line.
+func foldFieldValue(value string) string {
+	if !strings.ContainsAny(value, "\n\r") {
+		return value
+	}
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	var out strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			out.WriteString("\n")
+			// Ensure the continuation is a valid folded line and never blank
+			// (a blank line would terminate the stanza).
+			if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+				out.WriteString(" ")
+			}
+			if strings.TrimSpace(line) == "" {
+				out.WriteString(".")
+			}
+		}
+		out.WriteString(line)
+	}
 	return out.String()
 }
 

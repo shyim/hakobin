@@ -3,18 +3,27 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	s3config "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 
 	"hakobin/internal/config"
+)
+
+const (
+	lockRetryInterval = 2 * time.Second
+	lockMaxWait       = 5 * time.Minute
 )
 
 type Store interface {
@@ -23,6 +32,25 @@ type Store interface {
 	Exists(ctx context.Context, key string) (bool, error)
 	Delete(ctx context.Context, key string) error
 	ListKeys(ctx context.Context, prefix string) ([]string, error)
+	// AcquireLock creates an exclusive lock object at key that expires after
+	// ttlSeconds. It blocks (with backoff) until the lock is acquired, an
+	// existing lock expires and can be stolen, or ctx is cancelled. The
+	// returned Lock must be released with its Release method.
+	AcquireLock(ctx context.Context, key, owner string, ttlSeconds int64, nowUnix int64) (*Lock, error)
+	// ReleaseLock removes a lock previously acquired by this owner. It is a
+	// best-effort no-op if the lock was already stolen or released.
+	ReleaseLock(ctx context.Context, lock *Lock) error
+}
+
+// Lock represents an acquired exclusive lock on a repository.
+type Lock struct {
+	Key   string
+	Owner string
+}
+
+type lockRecord struct {
+	Owner     string `json:"owner"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 type S3Store struct {
@@ -147,24 +175,98 @@ func (s *S3Store) ListKeys(ctx context.Context, prefix string) ([]string, error)
 	return keys, nil
 }
 
+func (s *S3Store) AcquireLock(ctx context.Context, key, owner string, ttlSeconds, nowUnix int64) (*Lock, error) {
+	deadline := time.Now().Add(lockMaxWait)
+	for {
+		record := lockRecord{Owner: owner, ExpiresAt: nowUnix + ttlSeconds}
+		body, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+
+		// Conditional create: only succeeds if no object exists at key.
+		_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(s.bucket),
+			Key:         aws.String(key),
+			Body:        bytes.NewReader(body),
+			ContentType: aws.String("application/json"),
+			IfNoneMatch: aws.String("*"),
+		})
+		if err == nil {
+			return &Lock{Key: key, Owner: owner}, nil
+		}
+		if !isPreconditionFailed(err) {
+			return nil, fmt.Errorf("failed to acquire lock s3://%s/%s: %w", s.bucket, key, err)
+		}
+
+		// A lock already exists. Steal it if it has expired.
+		existing, derr := s.Download(ctx, key)
+		if derr == nil {
+			var cur lockRecord
+			if json.Unmarshal(existing, &cur) == nil && cur.ExpiresAt <= nowUnix {
+				if delErr := s.Delete(ctx, key); delErr != nil {
+					return nil, fmt.Errorf("failed to steal expired lock s3://%s/%s: %w", s.bucket, key, delErr)
+				}
+				continue
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for repository lock s3://%s/%s (another operation in progress)", s.bucket, key)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(lockRetryInterval):
+		}
+	}
+}
+
+func (s *S3Store) ReleaseLock(ctx context.Context, lock *Lock) error {
+	if lock == nil {
+		return nil
+	}
+	// Only delete the lock if we still own it, so we never remove a lock that
+	// was stolen from us after our TTL expired.
+	existing, err := s.Download(ctx, lock.Key)
+	if err != nil {
+		return nil
+	}
+	var cur lockRecord
+	if json.Unmarshal(existing, &cur) == nil && cur.Owner != lock.Owner {
+		return nil
+	}
+	return s.Delete(ctx, lock.Key)
+}
+
+func isPreconditionFailed(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		if code == "PreconditionFailed" || code == "412" {
+			return true
+		}
+	}
+	return strings.Contains(err.Error(), "PreconditionFailed") ||
+		strings.Contains(err.Error(), "status code: 412")
+}
+
 func isNotFoundError(err error) bool {
 	var nsk *s3types.NoSuchKey
 	var nsb *s3types.NoSuchBucket
-	if strings.Contains(err.Error(), "NotFound") ||
-		strings.Contains(err.Error(), "NoSuchKey") ||
-		strings.Contains(err.Error(), "NoSuchBucket") ||
-		strings.Contains(err.Error(), "status code: 404") {
+	var nf *s3types.NotFound
+	if errors.As(err, &nsk) || errors.As(err, &nsb) || errors.As(err, &nf) {
 		return true
 	}
-	// type assert if possible
-	if ok := strings.Contains(fmt.Sprintf("%T", err), "NoSuchKey"); ok {
-		return true
+	// HeadObject may surface a generic APIError with a 404/NotFound code that
+	// is not one of the modeled types above.
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		if code == "NotFound" || code == "NoSuchKey" || code == "NoSuchBucket" || code == "404" {
+			return true
+		}
 	}
-	if ok := strings.Contains(fmt.Sprintf("%T", err), "NoSuchBucket"); ok {
-		return true
-	}
-	_ = nsk
-	_ = nsb
 	return false
 }
 
@@ -229,6 +331,42 @@ func (m *MemoryStore) ListKeys(ctx context.Context, prefix string) ([]string, er
 		}
 	}
 	return keys, nil
+}
+
+func (m *MemoryStore) AcquireLock(ctx context.Context, key, owner string, ttlSeconds, nowUnix int64) (*Lock, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if obj, exists := m.objects[key]; exists {
+		var cur lockRecord
+		if json.Unmarshal(obj.body, &cur) == nil && cur.ExpiresAt > nowUnix {
+			return nil, fmt.Errorf("repository lock %s is held by another operation", key)
+		}
+	}
+
+	record := lockRecord{Owner: owner, ExpiresAt: nowUnix + ttlSeconds}
+	body, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	m.objects[key] = &storedObject{body: body, contentType: "application/json"}
+	return &Lock{Key: key, Owner: owner}, nil
+}
+
+func (m *MemoryStore) ReleaseLock(ctx context.Context, lock *Lock) error {
+	if lock == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if obj, exists := m.objects[lock.Key]; exists {
+		var cur lockRecord
+		if json.Unmarshal(obj.body, &cur) == nil && cur.Owner != lock.Owner {
+			return nil
+		}
+	}
+	delete(m.objects, lock.Key)
+	return nil
 }
 
 func (m *MemoryStore) Body(key string) ([]byte, bool) {
