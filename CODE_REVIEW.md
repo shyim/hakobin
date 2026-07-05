@@ -147,15 +147,19 @@ to `SignRpmFile` producing an error or bad signature.
 
 ## 🟢 Low (worth a sweep)
 
-- Stale `repomd.xml.asc`/pubkey never deleted when a repo goes from signed→unsigned
-  (`internal/rpm/repository.go:449`).
-- Orphaned checksum-named repodata never GC'd (`internal/rpm/rpm.go:468`).
-- `truncate` panics for `max<3` (`internal/rpm/repository.go:490`).
-- `S3_USE_PATH_STYLE` only accepts `"true"`/`"1"` — use `strconv.ParseBool` (`internal/config/config.go:24`).
-- No `PublicURL` URL validation (`internal/config/config.go:75`).
-- `RepositoryBaseURL` ignores `S3UsePathStyle` for AWS (`internal/config/config.go:85-96`).
-- Fragile multi-key armor concatenation not validated against real `gpg --import`
-  (`internal/openpgp/openpgp.go:308-317`).
+> **Status:** All fixed on branch `fix/high-severity-review`. Note the last item
+> uncovered a real bug: multi-key public bundles only parsed back the first key,
+> which would have silently broken key rotation on clients — now fixed and tested.
+
+- ✅ Stale `repomd.xml.asc`/pubkey deleted when a repo goes from signed→unsigned.
+- ✅ Orphaned checksum-named repodata garbage-collected against the new `repomd.xml`.
+- ✅ `truncate` no longer panics for `max<3` (fixed with the high-severity batch).
+- ✅ `S3_USE_PATH_STYLE` parsed with the common truthy spellings (`parseBool`).
+- ✅ `HAKOBIN_PUBLIC_URL` validated as a well-formed http(s) URL in `RequireS3`.
+- ✅ `RepositoryBaseURL` emits a path-style URL when `S3UsePathStyle` is set for AWS.
+- ✅ Multi-key armor bundle is now built deterministically **and round-trip
+  verified**; the verification exposed and fixed a parser bug where only the
+  first armored block was read.
 
 ---
 

@@ -2,6 +2,7 @@ package rpm
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"hakobin/internal/config"
 	"hakobin/internal/openpgp"
+	"hakobin/internal/storage"
 )
 
 func TestSplitEVR(t *testing.T) {
@@ -138,6 +141,63 @@ func TestRpmPackageSigningUsesActiveKey(t *testing.T) {
 	parsed, err := FromBytes("Packages/demo-1.0.0-1.el9.x86_64.rpm", signed)
 	require.NoError(t, err)
 	assert.Equal(t, "demo", parsed.Name)
+}
+
+func TestWriteMetadataCleansStaleSignatureAndOrphanedRepodata(t *testing.T) {
+	store := storage.NewMemoryStore()
+	cfg := &config.Config{
+		S3BucketName: "b", S3Region: "us-east-1", S3AccessKeyID: "k", S3SecretAccessKey: "s",
+		PublicURL: "https://packages.example.test",
+	}
+	rm := NewRpmRepositoryManager(cfg, store)
+	ctx := context.Background()
+
+	raw, err := testRpmPackage()
+	require.NoError(t, err)
+	pkg, err := FromBytes("Packages/demo-1.0.0-1.el9.x86_64.rpm", raw)
+	require.NoError(t, err)
+
+	key, err := openpgp.GenerateKeyPair("Hakobin RPM", "hakobin@example.com", "test", 0)
+	require.NoError(t, err)
+	signed := openpgp.NewSigningKeys(key, nil)
+
+	// First write: signed.
+	require.NoError(t, rm.writeMetadata(ctx, "stable", "x86_64", []RpmPackage{*pkg}, signed))
+	_, ok := store.Body("rpm/stable/x86_64/repodata/repomd.xml.asc")
+	require.True(t, ok, "signed run must produce repomd.xml.asc")
+	_, ok = store.Body("rpm/stable/x86_64/" + RpmPublicKeyName)
+	require.True(t, ok, "signed run must produce the public key")
+
+	firstPrimary := "rpm/stable/x86_64/repodata/" + primaryFilename(t, store)
+
+	// Second write: unsigned. Stale .asc/pubkey must be gone, and the previous
+	// checksum-named primary must be garbage-collected.
+	require.NoError(t, rm.writeMetadata(ctx, "stable", "x86_64", []RpmPackage{*pkg}, openpgp.NewSigningKeys(nil, nil)))
+
+	_, ok = store.Body("rpm/stable/x86_64/repodata/repomd.xml.asc")
+	assert.False(t, ok, "stale repomd.xml.asc must be deleted on unsigned run")
+	_, ok = store.Body("rpm/stable/x86_64/" + RpmPublicKeyName)
+	assert.False(t, ok, "stale public key must be deleted on unsigned run")
+
+	// The repodata dir must not accumulate old checksum-named primary files.
+	primaries := 0
+	for _, k := range store.Keys() {
+		if strings.HasPrefix(k, "rpm/stable/x86_64/repodata/") && strings.Contains(k, "-primary.xml.gz") {
+			primaries++
+		}
+	}
+	assert.Equal(t, 1, primaries, "old primary.xml.gz should be garbage-collected")
+	_ = firstPrimary
+}
+
+func primaryFilename(t *testing.T, store *storage.MemoryStore) string {
+	t.Helper()
+	for _, k := range store.Keys() {
+		if strings.HasPrefix(k, "rpm/stable/x86_64/repodata/") && strings.Contains(k, "-primary.xml.gz") {
+			return strings.TrimPrefix(k, "rpm/stable/x86_64/repodata/")
+		}
+	}
+	return ""
 }
 
 func testRpmPackage() ([]byte, error) {

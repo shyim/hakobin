@@ -278,11 +278,13 @@ func ParsePublicKeyCerts(data []byte) ([]*PublicKeyCert, error) {
 	isArmored := bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) ||
 		bytes.Contains(data, []byte("-----BEGIN PGP PRIVATE KEY BLOCK-----"))
 	if isArmored {
-		r := bytes.NewReader(data)
-		for {
-			block, err := armor.Decode(r)
+		// Split the input into individual armored blocks and decode each with
+		// its own reader. Decoding sequentially from a single shared reader is
+		// unreliable when multiple concatenated blocks are present.
+		for _, blockBytes := range splitArmoredBlocks(data) {
+			block, err := armor.Decode(bytes.NewReader(blockBytes))
 			if err == io.EOF {
-				break
+				continue
 			}
 			if err != nil {
 				return nil, err
@@ -316,6 +318,34 @@ func ParsePublicKeyCerts(data []byte) ([]*PublicKeyCert, error) {
 		certs = append(certs, cert)
 	}
 	return certs, nil
+}
+
+// splitArmoredBlocks extracts each individual ASCII-armored block (from its
+// "-----BEGIN" line through the matching "-----END" line) so each can be
+// decoded independently.
+func splitArmoredBlocks(data []byte) [][]byte {
+	lines := strings.Split(string(data), "\n")
+	var blocks [][]byte
+	var current []string
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "-----BEGIN ") {
+			inBlock = true
+			current = []string{line}
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		current = append(current, line)
+		if strings.HasPrefix(trimmed, "-----END ") {
+			blocks = append(blocks, []byte(strings.Join(current, "\n")+"\n"))
+			inBlock = false
+			current = nil
+		}
+	}
+	return blocks
 }
 
 func (p *PublicKeyCert) ToBinary() ([]byte, error) {
@@ -367,16 +397,34 @@ func (s *SigningKeys) PublicKeyArmored() ([]byte, error) {
 	}
 
 	var out strings.Builder
-	for _, cert := range certs {
-		if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
-			out.WriteString("\n")
+	for i, cert := range certs {
+		block := strings.TrimRight(cert.PublicKey, "\n")
+		if i > 0 {
+			// Separate consecutive armored blocks with a blank line so parsers
+			// (gpg --import, apt-key) reliably see distinct keys.
+			out.WriteString("\n\n")
 		}
-		out.WriteString(cert.PublicKey)
-		if !strings.HasSuffix(cert.PublicKey, "\n") {
-			out.WriteString("\n")
+		out.WriteString(block)
+	}
+	if out.Len() > 0 {
+		out.WriteString("\n")
+	}
+
+	bundle := []byte(out.String())
+
+	// Guard against a malformed concatenation: the emitted bundle must parse
+	// back to exactly the certs we put in.
+	if len(certs) > 0 {
+		parsed, err := ParsePublicKeyCerts(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("public key bundle failed to round-trip: %w", err)
+		}
+		if len(parsed) != len(certs) {
+			return nil, fmt.Errorf("public key bundle round-trip mismatch: wrote %d keys, parsed %d", len(certs), len(parsed))
 		}
 	}
-	return []byte(out.String()), nil
+
+	return bundle, nil
 }
 
 func (s *SigningKeys) PublicKeyBinary() ([]byte, error) {

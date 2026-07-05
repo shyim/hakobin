@@ -59,6 +59,38 @@ func TestPublicKeyBundleIncludesActiveAndTrustedKeys(t *testing.T) {
 	assert.NotEmpty(t, binary)
 }
 
+func TestPublicKeyBundleRoundTripsAllKeys(t *testing.T) {
+	active, err := GenerateKeyPair("Hakobin Active", "active@example.com", "test", 0)
+	require.NoError(t, err)
+	old1, err := GenerateKeyPair("Hakobin Old1", "old1@example.com", "test", 0)
+	require.NoError(t, err)
+	old2, err := GenerateKeyPair("Hakobin Old2", "old2@example.com", "test", 0)
+	require.NoError(t, err)
+
+	c1, err := old1.PublicKeyCert()
+	require.NoError(t, err)
+	c2, err := old2.PublicKeyCert()
+	require.NoError(t, err)
+
+	sk := NewSigningKeys(active, []*PublicKeyCert{c1, c2})
+
+	bundle, err := sk.PublicKeyArmored()
+	require.NoError(t, err)
+
+	// The whole bundle must parse back to all three distinct keys, not just the
+	// first block.
+	parsed, err := ParsePublicKeyCerts(bundle)
+	require.NoError(t, err)
+	fps := map[string]bool{}
+	for _, c := range parsed {
+		fps[c.Fingerprint] = true
+	}
+	assert.Len(t, fps, 3)
+	assert.True(t, fps[active.Fingerprint])
+	assert.True(t, fps[old1.Fingerprint])
+	assert.True(t, fps[old2.Fingerprint])
+}
+
 func TestPublicKeyBundleDeduplicatesActiveKey(t *testing.T) {
 	active, err := GenerateKeyPair("Hakobin Active", "hakobin@example.com", "test", 0)
 	require.NoError(t, err)

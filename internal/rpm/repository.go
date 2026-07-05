@@ -504,8 +504,9 @@ func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch st
 		return err
 	}
 
+	sigPath := repodataPrefix + "repomd.xml.asc"
 	if sigBytes != nil {
-		err = rm.store.UploadBytes(ctx, repodataPrefix+"repomd.xml.asc", sigBytes, "application/pgp-signature")
+		err = rm.store.UploadBytes(ctx, sigPath, sigBytes, "application/pgp-signature")
 		if err != nil {
 			return err
 		}
@@ -513,6 +514,32 @@ func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch st
 		if err != nil {
 			return err
 		}
+	} else {
+		// Repository is now unsigned: remove any stale signature/public key from
+		// a previous signed run so clients don't verify a stale signature (or an
+		// old key) against the freshly written metadata.
+		if err := rm.store.Delete(ctx, sigPath); err != nil {
+			return err
+		}
+		if err := rm.store.Delete(ctx, pubKeyPath); err != nil {
+			return err
+		}
+	}
+
+	// Garbage-collect repodata objects no longer referenced by the new
+	// repomd.xml (old checksum-named primary/filelists/other files accumulate
+	// on every regeneration otherwise).
+	keep := map[string]bool{
+		repodataPrefix + "repomd.xml":                true,
+		repodataPrefix + metadata.Primary.Filename:   true,
+		repodataPrefix + metadata.Filelists.Filename: true,
+		repodataPrefix + metadata.Other.Filename:     true,
+	}
+	if sigBytes != nil {
+		keep[sigPath] = true
+	}
+	if err := rm.pruneRepodata(ctx, repodataPrefix, keep); err != nil {
+		return err
 	}
 
 	paths := []string{
@@ -523,13 +550,30 @@ func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch st
 	}
 
 	if signingKeys != nil && signingKeys.Active != nil {
-		paths = append(paths, repodataPrefix+"repomd.xml.asc")
+		paths = append(paths, sigPath)
 		paths = append(paths, pubKeyPath)
 	}
 	paths = append(paths, extraInvalidationPaths...)
 
 	rm.invalidateCDN(ctx, paths)
 
+	return nil
+}
+
+// pruneRepodata deletes objects under repodataPrefix that are not in keep.
+func (rm *RpmRepositoryManager) pruneRepodata(ctx context.Context, repodataPrefix string, keep map[string]bool) error {
+	existing, err := rm.store.ListKeys(ctx, repodataPrefix)
+	if err != nil {
+		return err
+	}
+	for _, key := range existing {
+		if keep[key] {
+			continue
+		}
+		if err := rm.store.Delete(ctx, key); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

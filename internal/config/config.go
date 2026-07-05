@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -21,8 +23,9 @@ func FromEnv() *Config {
 	if region == "" {
 		region = "us-east-1"
 	}
-	pathStyle := env("S3_USE_PATH_STYLE")
-	usePathStyle := pathStyle == "true" || pathStyle == "1"
+	// Accept the usual truthy spellings (true/TRUE/yes/1/on) rather than only
+	// the exact strings "true"/"1".
+	usePathStyle := parseBool(env("S3_USE_PATH_STYLE"))
 
 	return &Config{
 		S3Endpoint:        env("S3_ENDPOINT"),
@@ -44,6 +47,28 @@ func (c *Config) RequireS3() error {
 	}
 	if _, err := c.SecretKey(); err != nil {
 		return err
+	}
+	if err := c.validatePublicURL(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePublicURL rejects a malformed HAKOBIN_PUBLIC_URL early, before it is
+// baked into setup.sh source lines or CDN purge URLs.
+func (c *Config) validatePublicURL() error {
+	if c.PublicURL == "" {
+		return nil
+	}
+	u, err := url.Parse(c.PublicURL)
+	if err != nil {
+		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: %w", c.PublicURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: must be an http or https URL", c.PublicURL)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: missing host", c.PublicURL)
 	}
 	return nil
 }
@@ -90,6 +115,15 @@ func (c *Config) RepositoryBaseURL() (string, error) {
 		return fmt.Sprintf("https://%s/%s", endpoint, bucket), nil
 	}
 
+	// Path-style access addresses the bucket as a path under the regional S3
+	// host rather than as a virtual host, so the generated URLs must match.
+	if c.S3UsePathStyle {
+		if c.S3Region != "us-east-1" {
+			return fmt.Sprintf("https://s3.%s.amazonaws.com/%s", c.S3Region, bucket), nil
+		}
+		return fmt.Sprintf("https://s3.amazonaws.com/%s", bucket), nil
+	}
+
 	if c.S3Region != "us-east-1" {
 		return fmt.Sprintf("https://%s.s3.%s.amazonaws.com", bucket, c.S3Region), nil
 	}
@@ -98,4 +132,19 @@ func (c *Config) RepositoryBaseURL() (string, error) {
 
 func env(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
+}
+
+// parseBool accepts the common truthy spellings; anything else (including empty)
+// is false.
+func parseBool(v string) bool {
+	b, err := strconv.ParseBool(strings.ToLower(strings.TrimSpace(v)))
+	if err != nil {
+		// ParseBool doesn't accept "yes"/"on"; handle those explicitly.
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "yes", "on":
+			return true
+		}
+		return false
+	}
+	return b
 }
