@@ -199,6 +199,56 @@ func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
 	}
 }
 
+func TestListPackages(t *testing.T) {
+	cfg := &config.Config{
+		S3BucketName: "test-bucket", S3Region: "us-east-1", S3UsePathStyle: true,
+		S3AccessKeyID: "k", S3SecretAccessKey: "s",
+		PublicURL: "https://packages.example.test",
+	}
+	store := storage.NewMemoryStore()
+	manager := NewRepositoryManager(cfg, store)
+	ctx := context.Background()
+
+	key, err := openpgp.GenerateKeyPair("Hakobin", "gpg@example.com", "test", 0)
+	require.NoError(t, err)
+	keys := openpgp.NewSigningKeys(key, nil)
+
+	require.NoError(t, manager.Init(ctx, &InitRequest{
+		Metadata: RepoMetadata{
+			Distributions: []string{"stable"},
+			Components:    []string{"main"},
+			Architectures: []string{"amd64"},
+		},
+		KeyName: "GPG Key", KeyEmail: "gpg@example.com",
+	}))
+
+	control := []byte("Package: demo\nVersion: 1.0.0\nArchitecture: amd64\nDescription: Demo package\n")
+	tempDeb, err := os.CreateTemp("", "demo-*.deb")
+	require.NoError(t, err)
+	defer os.Remove(tempDeb.Name())
+	_, err = tempDeb.Write(testDeb(control))
+	require.NoError(t, err)
+	tempDeb.Close()
+
+	require.NoError(t, manager.Upload(ctx, &UploadRequest{
+		DebFiles: []string{tempDeb.Name()}, Distribution: "stable", Component: "main", SigningKeys: keys,
+	}))
+
+	// List with no filter, with a matching name filter, and with a non-matching
+	// filter must all complete without error.
+	require.NoError(t, manager.ListPackages(ctx, nil, nil, nil))
+
+	name := "demo"
+	require.NoError(t, manager.ListPackages(ctx, nil, nil, &name))
+
+	missing := "nonexistent"
+	require.NoError(t, manager.ListPackages(ctx, nil, nil, &missing))
+
+	dist := "stable"
+	comp := "main"
+	require.NoError(t, manager.ListPackages(ctx, &dist, &comp, nil))
+}
+
 func testDeb(control []byte) []byte {
 	controlTar := gzippedControlTar(control)
 	emptyTar := gzippedControlTar([]byte("Package: ignored\n"))

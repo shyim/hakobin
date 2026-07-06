@@ -2,6 +2,7 @@ package openpgp
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +11,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	// Use smaller RSA keys in tests: RSA-4096 keygen dominates wall time.
+	if os.Getenv("HAKOBIN_TEST_RSA_BITS") == "" {
+		os.Setenv("HAKOBIN_TEST_RSA_BITS", "2048")
+	}
+	os.Exit(m.Run())
+}
 
 // serializeEncryptedPrivateKey armors an entity whose private key is already
 // encrypted, mirroring what a passphrase-protected key file on disk looks like.

@@ -8,6 +8,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMemoryStoreCRUD(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+
+	// Missing key: Exists false, Download errors.
+	exists, err := store.Exists(ctx, "a/b")
+	require.NoError(t, err)
+	assert.False(t, exists)
+	_, err = store.Download(ctx, "a/b")
+	require.Error(t, err)
+
+	// Upload then read back.
+	require.NoError(t, store.UploadBytes(ctx, "a/b", []byte("hello"), "text/plain"))
+	exists, err = store.Exists(ctx, "a/b")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	body, err := store.Download(ctx, "a/b")
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(body))
+
+	ct, ok := store.ContentType("a/b")
+	require.True(t, ok)
+	assert.Equal(t, "text/plain", ct)
+	_, ok = store.ContentType("missing")
+	assert.False(t, ok)
+
+	// Delete then confirm gone; deleting a missing key is a no-op.
+	require.NoError(t, store.Delete(ctx, "a/b"))
+	exists, err = store.Exists(ctx, "a/b")
+	require.NoError(t, err)
+	assert.False(t, exists)
+	require.NoError(t, store.Delete(ctx, "a/b"))
+}
+
+func TestMemoryStoreListKeysByPrefix(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	require.NoError(t, store.UploadBytes(ctx, "deb/pool/x", []byte("1"), "text/plain"))
+	require.NoError(t, store.UploadBytes(ctx, "deb/dists/y", []byte("2"), "text/plain"))
+	require.NoError(t, store.UploadBytes(ctx, "rpm/z", []byte("3"), "text/plain"))
+
+	keys, err := store.ListKeys(ctx, "deb/")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"deb/pool/x", "deb/dists/y"}, keys)
+
+	keys, err = store.ListKeys(ctx, "rpm/")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"rpm/z"}, keys)
+
+	assert.Len(t, store.Keys(), 3)
+}
+
 func TestMemoryStoreLockIsExclusive(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()

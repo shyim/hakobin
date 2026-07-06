@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +109,19 @@ func NewPublicKeyCert(entity *openpgp.Entity) (*PublicKeyCert, error) {
 	}, nil
 }
 
+// rsaKeyBits returns the RSA key size for generated signing keys. Production
+// always uses 4096; the test suite may lower it via HAKOBIN_TEST_RSA_BITS to
+// keep key generation fast (RSA-4096 keygen is very slow and dominates test
+// wall time). It is read lazily so tests can set the env var in TestMain.
+func rsaKeyBits() int {
+	if v := os.Getenv("HAKOBIN_TEST_RSA_BITS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1024 {
+			return n
+		}
+	}
+	return 4096
+}
+
 func GenerateKeyPair(name, email, comment string, expirationYears uint32) (*KeyPair, error) {
 	var lifetimeSecs uint32
 	if expirationYears > 0 {
@@ -116,7 +130,7 @@ func GenerateKeyPair(name, email, comment string, expirationYears uint32) (*KeyP
 
 	config := &packet.Config{
 		Algorithm:       packet.PubKeyAlgoRSA,
-		RSABits:         4096,
+		RSABits:         rsaKeyBits(),
 		KeyLifetimeSecs: lifetimeSecs,
 	}
 

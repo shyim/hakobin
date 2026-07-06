@@ -26,6 +26,31 @@ func TestSplitEVR(t *testing.T) {
 	assert.Equal(t, "0", epoch)
 	assert.Equal(t, "2.3.4", ver)
 	assert.Equal(t, "", rel)
+
+	// Epoch only, no release.
+	epoch, ver, rel = splitEVR("2:1.0")
+	assert.Equal(t, "2", epoch)
+	assert.Equal(t, "1.0", ver)
+	assert.Equal(t, "", rel)
+
+	// Empty string.
+	epoch, ver, rel = splitEVR("")
+	assert.Equal(t, "0", epoch)
+	assert.Equal(t, "", ver)
+	assert.Equal(t, "", rel)
+}
+
+func TestFormatFlags(t *testing.T) {
+	assert.Equal(t, "<", formatFlags(0x02))
+	assert.Equal(t, ">", formatFlags(0x04))
+	assert.Equal(t, "=", formatFlags(0x08))
+	assert.Equal(t, "<=", formatFlags(0x0a))
+	assert.Equal(t, ">=", formatFlags(0x0c))
+	// Non-comparison flags yield no operator.
+	assert.Equal(t, "", formatFlags(0x00))
+	assert.Equal(t, "", formatFlags(0x10))
+	// The comparison bits are masked out of higher bits.
+	assert.Equal(t, "=", formatFlags(0x08|0x100))
 }
 
 func TestDiscoversRpmRepositoryFromMetadataAndPackageKeys(t *testing.T) {
