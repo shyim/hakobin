@@ -8,6 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCacheControlFor(t *testing.T) {
+	// Package blobs are immutable and cached long.
+	assert.Equal(t, "public, max-age=31536000, immutable",
+		cacheControlFor("deb/pool/n/nginx/nginx_1_amd64.deb", "application/vnd.debian.binary-package"))
+	assert.Equal(t, "public, max-age=31536000, immutable",
+		cacheControlFor("rpm/stable/x86_64/Packages/demo.rpm", "application/x-rpm"))
+	// Metadata is revalidated quickly.
+	assert.Equal(t, "public, max-age=60, must-revalidate",
+		cacheControlFor("deb/dists/stable/Release", "text/plain"))
+	assert.Equal(t, "public, max-age=60, must-revalidate",
+		cacheControlFor("rpm/stable/x86_64/repodata/repomd.xml", "application/xml"))
+}
+
 func TestMemoryStoreCRUD(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()
