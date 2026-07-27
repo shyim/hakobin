@@ -14,7 +14,7 @@ require (
 	github.com/google/rpmpack v0.7.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.19.1
-	github.com/mattn/go-isatty v0.0.23
+	github.com/mattn/go-isatty v0.0.24
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/sassoftware/go-rpmutils v0.4.0
 	github.com/spf13/cobra v1.10.2
