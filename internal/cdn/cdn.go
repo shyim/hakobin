@@ -18,7 +18,7 @@ import (
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudfront/types"
 	"github.com/google/uuid"
 
-	"hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/config"
 )
 
 type CdnInvalidator struct {

@@ -22,7 +22,7 @@ builds:
     main: ./main.go
     binary: hakobin
     ldflags:
-      - -s -w -X hakobin/cmd.Version={{.Version}} -X hakobin/cmd.Commit={{.Commit}} -X hakobin/cmd.Date={{.Date}}
+      - -s -w -X github.com/shyim/hakobin/cmd.Version={{.Version}} -X github.com/shyim/hakobin/cmd.Commit={{.Commit}} -X github.com/shyim/hakobin/cmd.Date={{.Date}}
 
 archives:
   - formats: [tar.gz]

@@ -6,10 +6,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"hakobin/internal/config"
-	"hakobin/internal/openpgp"
-	"hakobin/internal/rpm"
-	"hakobin/internal/storage"
+	"github.com/shyim/hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/openpgp"
+	"github.com/shyim/hakobin/internal/rpm"
+	"github.com/shyim/hakobin/internal/storage"
 )
 
 var (

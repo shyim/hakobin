@@ -1,6 +1,6 @@
 package main
 
-import "hakobin/cmd"
+import "github.com/shyim/hakobin/cmd"
 
 func main() {
 	cmd.Execute()
