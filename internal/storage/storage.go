@@ -19,7 +19,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
 
-	"hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/config"
 )
 
 const (

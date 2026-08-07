@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/config"
 )
 
 func TestFromEnvDisabledWhenUnset(t *testing.T) {

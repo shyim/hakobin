@@ -24,11 +24,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/minio"
 	"github.com/testcontainers/testcontainers-go/network"
 
-	hconfig "hakobin/internal/config"
-	"hakobin/internal/openpgp"
-	"hakobin/internal/repository"
-	"hakobin/internal/rpm"
-	"hakobin/internal/storage"
+	hconfig "github.com/shyim/hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/openpgp"
+	"github.com/shyim/hakobin/internal/repository"
+	"github.com/shyim/hakobin/internal/rpm"
+	"github.com/shyim/hakobin/internal/storage"
 )
 
 func TestE2EWorkflow(t *testing.T) {

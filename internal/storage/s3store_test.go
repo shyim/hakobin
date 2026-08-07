@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/config"
 )
 
 // fakeS3 is a minimal in-memory S3-compatible server covering exactly the

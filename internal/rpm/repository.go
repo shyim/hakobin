@@ -13,10 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/olekukonko/tablewriter"
 
-	"hakobin/internal/cdn"
-	"hakobin/internal/config"
-	"hakobin/internal/openpgp"
-	"hakobin/internal/storage"
+	"github.com/shyim/hakobin/internal/cdn"
+	"github.com/shyim/hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/openpgp"
+	"github.com/shyim/hakobin/internal/storage"
 )
 
 const (

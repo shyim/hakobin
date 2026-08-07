@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/config"
 )
 
 var (

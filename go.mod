@@ -1,4 +1,4 @@
-module hakobin
+module github.com/shyim/hakobin
 
 go 1.26.4
 

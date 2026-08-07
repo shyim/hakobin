@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"hakobin/internal/config"
-	"hakobin/internal/openpgp"
-	"hakobin/internal/storage"
+	"github.com/shyim/hakobin/internal/config"
+	"github.com/shyim/hakobin/internal/openpgp"
+	"github.com/shyim/hakobin/internal/storage"
 )
 
 func TestAptWorkflowUploadRemoveAndRotateKeyUsesMemoryStore(t *testing.T) {

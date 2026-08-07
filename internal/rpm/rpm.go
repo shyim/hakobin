@@ -14,7 +14,7 @@ import (
 
 	"github.com/sassoftware/go-rpmutils"
 
-	"hakobin/internal/openpgp"
+	"github.com/shyim/hakobin/internal/openpgp"
 )
 
 const (
