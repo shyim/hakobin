@@ -57,7 +57,7 @@ func TestE2EWorkflow(t *testing.T) {
 	}()
 
 	// 2. Start MinIO test container on the network
-	minioContainer, err := minio.Run(ctx, "minio/minio:latest",
+	minioContainer, err := minio.Run(ctx, "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
 		network.WithNetwork([]string{"minio-s3"}, nw),
 	)
 	require.NoError(t, err)
