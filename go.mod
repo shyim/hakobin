@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.0
 	github.com/mattn/go-isatty v0.0.24
-	github.com/olekukonko/tablewriter v1.1.4
+	github.com/olekukonko/tablewriter v1.1.5
 	github.com/sassoftware/go-rpmutils v0.4.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
