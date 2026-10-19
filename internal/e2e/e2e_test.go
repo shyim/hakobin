@@ -7,22 +7,20 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/rpmpack"
+	s3mock "github.com/grafana/s3-mock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/minio"
-	"github.com/testcontainers/testcontainers-go/network"
 
 	hconfig "github.com/shyim/hakobin/internal/config"
 	"github.com/shyim/hakobin/internal/openpgp"
@@ -49,46 +47,34 @@ func TestE2EWorkflow(t *testing.T) {
 		nativeRpmArch = "aarch64"
 	}
 
-	// 1. Create Docker network
-	nw, err := network.New(ctx)
+	// 1. Start an in-process S3 server. The mock permits anonymous reads,
+	// so package-manager clients do not need a bucket policy.
+	client, closeMock, err := s3mock.New()
 	require.NoError(t, err)
 	defer func() {
-		_ = nw.Remove(ctx)
+		_ = closeMock(ctx)
 	}()
 
-	// 2. Start MinIO test container on the network
-	minioContainer, err := minio.Run(ctx, "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
-		network.WithNetwork([]string{"minio-s3"}, nw),
-	)
+	hostEndpoint := aws.ToString(client.Options().BaseEndpoint)
+	endpointURL, err := url.Parse(hostEndpoint)
 	require.NoError(t, err)
-	defer func() {
-		_ = minioContainer.Terminate(ctx)
-	}()
-
-	// Host connection endpoint (using localhost mapping)
-	hostEndpoint, err := minioContainer.ConnectionString(ctx)
+	hostPort, err := strconv.Atoi(endpointURL.Port())
 	require.NoError(t, err)
-	if !strings.HasPrefix(hostEndpoint, "http://") && !strings.HasPrefix(hostEndpoint, "https://") {
-		hostEndpoint = "http://" + hostEndpoint
-	}
+	creds, err := client.Options().Credentials.Retrieve(ctx)
+	require.NoError(t, err)
 
 	bucketName := "hakobin-test-bucket"
-
-	// Container-internal public URL base for the repository (must include the bucket name for path-style access)
-	containerPublicURL := "http://minio-s3:9000/" + bucketName
-
-	accessKey := minioContainer.Username
-	secretKey := minioContainer.Password
-
-	// 3. Create the test bucket and configure it as public-read in MinIO
-	err = createMinioBucket(ctx, hostEndpoint, accessKey, secretKey, bucketName)
+	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucketName)})
 	require.NoError(t, err)
 
-	// 4. Construct host config (for uploading packages)
+	// 2. Forward the mock's host port into both package-manager containers.
+	containerPublicURL := fmt.Sprintf("http://%s:%d/%s", testcontainers.HostInternal, hostPort, bucketName)
+
+	// 3. Construct host config (for uploading packages)
 	hostCfg := &hconfig.Config{
 		S3Endpoint:        hostEndpoint,
-		S3AccessKeyID:     accessKey,
-		S3SecretAccessKey: secretKey,
+		S3AccessKeyID:     creds.AccessKeyID,
+		S3SecretAccessKey: creds.SecretAccessKey,
 		S3BucketName:      bucketName,
 		S3Region:          "us-east-1",
 		S3UsePathStyle:    true,
@@ -98,12 +84,12 @@ func TestE2EWorkflow(t *testing.T) {
 	store, err := storage.NewS3Store(ctx, hostCfg)
 	require.NoError(t, err)
 
-	// 5. Spin up client test containers on the same network
+	// 4. Spin up client test containers with access to the mock server
 	ubuntuClient, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:    "ubuntu:24.04",
-			Cmd:      []string{"tail", "-f", "/dev/null"},
-			Networks: []string{nw.Name},
+			Image:           "ubuntu:24.04",
+			Cmd:             []string{"tail", "-f", "/dev/null"},
+			HostAccessPorts: []int{hostPort},
 		},
 		Started: true,
 	})
@@ -114,9 +100,9 @@ func TestE2EWorkflow(t *testing.T) {
 
 	almaClient, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:    "almalinux:9",
-			Cmd:      []string{"tail", "-f", "/dev/null"},
-			Networks: []string{nw.Name},
+			Image:           "almalinux:9",
+			Cmd:             []string{"tail", "-f", "/dev/null"},
+			HostAccessPorts: []int{hostPort},
 		},
 		Started: true,
 	})
@@ -314,47 +300,6 @@ func runExec(t *testing.T, ctx context.Context, container testcontainers.Contain
 	if exitCode != 0 {
 		t.Fatalf("command failed with exit code %d: %v. Output:\n%s", exitCode, cmd, output)
 	}
-}
-
-func createMinioBucket(ctx context.Context, endpoint, accessKey, secretKey, bucket string) error {
-	awsCfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-	)
-	if err != nil {
-		return err
-	}
-
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(endpoint)
-		o.UsePathStyle = true
-	})
-	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
-	if err != nil {
-		return err
-	}
-
-	// Apply public-read bucket policy so that clients can fetch objects anonymously
-	policy := fmt.Sprintf(`{
-		"Version": "2012-10-17",
-		"Statement": [
-			{
-				"Sid": "PublicRead",
-				"Effect": "Allow",
-				"Principal": "*",
-				"Action": ["s3:GetObject"],
-				"Resource": ["arn:aws:s3:::%s/*"]
-			}
-		]
-	}`, bucket)
-
-	_, err = client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
-		Bucket: aws.String(bucket),
-		Policy: aws.String(policy),
-	})
-	return err
 }
 
 func testDeb(controlTar, dataTar []byte) []byte {

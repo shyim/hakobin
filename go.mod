@@ -13,6 +13,7 @@ require (
 	github.com/aws/smithy-go v1.28.5
 	github.com/google/rpmpack v0.7.1
 	github.com/google/uuid v1.6.0
+	github.com/grafana/s3-mock v0.2.0
 	github.com/klauspost/compress v1.20.3
 	github.com/mattn/go-isatty v0.0.24
 	github.com/olekukonko/tablewriter v1.1.5
@@ -20,7 +21,6 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/minio v0.44.0
 	github.com/ulikunitz/xz v0.5.17
 )
 
