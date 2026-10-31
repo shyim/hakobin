@@ -111,6 +111,38 @@ func TestPackageEntryFiltersReservedFieldsCaseInsensitively(t *testing.T) {
 	assert.NotContains(t, entry, "deadbeef")
 }
 
+func TestRejectsInvalidArMemberSizesWithoutPanicking(t *testing.T) {
+	for _, size := range []string{"-1", "9999999999", "1evil"} {
+		t.Run(size, func(t *testing.T) {
+			archive := arArchiveWithRawSize(size)
+			var err error
+			require.NotPanics(t, func() {
+				_, err = parseAr(archive)
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
+func arArchiveWithRawSize(size string) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("!<arch>\n")
+	header := fmt.Sprintf("%-16s%-12d%-6d%-6d%-8o%-10s`\n",
+		"control.tar/", 0, 0, 0, 0100644, size)
+	buf.WriteString(header)
+	return buf.Bytes()
+}
+
+func FuzzParseArNeverPanics(f *testing.F) {
+	f.Add([]byte(""))
+	f.Add(arArchiveWithRawSize("-1"))
+	f.Add(arArchiveWithRawSize("9999999999"))
+	f.Add(testDeb([]byte("Package: demo\nVersion: 1.0\nArchitecture: amd64\n")))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = parseAr(data)
+	})
+}
+
 func testDeb(control []byte) []byte {
 	controlTar := gzippedControlTar(control)
 	emptyTar := gzippedControlTar([]byte("Package: ignored\n"))
