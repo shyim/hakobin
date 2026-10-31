@@ -34,6 +34,11 @@ export S3_ENDPOINT=http://localhost:9000
 export S3_USE_PATH_STYLE=true
 ```
 
+Hakobin rejects non-loopback HTTP repository URLs because clients download and
+trust both the root setup script and signing key from that URL. For an isolated
+development network that cannot use HTTPS, opt in explicitly with
+`HAKOBIN_ALLOW_INSECURE_HTTP=true`.
+
 Set the public base URL that clients will use to download packages:
 
 ```bash

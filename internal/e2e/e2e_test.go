@@ -79,6 +79,7 @@ func TestE2EWorkflow(t *testing.T) {
 		S3Region:          "us-east-1",
 		S3UsePathStyle:    true,
 		PublicURL:         containerPublicURL, // Generated Setup script and Release indexes will point here
+		AllowInsecureHTTP: true,               // Testcontainers exposes the in-process mock over HTTP.
 	}
 
 	store, err := storage.NewS3Store(ctx, hostCfg)

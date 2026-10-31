@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -17,6 +18,7 @@ type Config struct {
 	S3Region          string
 	S3UsePathStyle    bool
 	PublicURL         string
+	AllowInsecureHTTP bool
 }
 
 func FromEnv() *Config {
@@ -37,6 +39,7 @@ func FromEnv() *Config {
 		S3Region:          region,
 		S3UsePathStyle:    usePathStyle,
 		PublicURL:         env("HAKOBIN_PUBLIC_URL"),
+		AllowInsecureHTTP: parseBool(env("HAKOBIN_ALLOW_INSECURE_HTTP")),
 	}
 }
 
@@ -50,7 +53,7 @@ func (c *Config) RequireS3() error {
 	if _, err := c.SecretKey(); err != nil {
 		return err
 	}
-	if err := c.validatePublicURL(); err != nil {
+	if _, err := c.RepositoryBaseURL(); err != nil {
 		return err
 	}
 	return nil
@@ -62,30 +65,45 @@ func (c *Config) validatePublicURL() error {
 	if c.PublicURL == "" {
 		return nil
 	}
-	u, err := url.Parse(c.PublicURL)
+	return c.validateRepositoryURL(c.PublicURL, "HAKOBIN_PUBLIC_URL")
+}
+
+func (c *Config) validateRepositoryURL(raw, setting string) error {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: %w", c.PublicURL, err)
+		return fmt.Errorf("invalid %s %q: %w", setting, raw, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: must be an http or https URL", c.PublicURL)
+		return fmt.Errorf("invalid %s %q: must be an http or https URL", setting, raw)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: missing host", c.PublicURL)
+		return fmt.Errorf("invalid %s %q: missing host", setting, raw)
+	}
+	if u.Scheme == "http" && !c.AllowInsecureHTTP && !isLoopbackHost(u.Hostname()) {
+		return fmt.Errorf("invalid %s %q: plain HTTP is unsafe for repository bootstrap; use HTTPS or set HAKOBIN_ALLOW_INSECURE_HTTP=1", setting, raw)
 	}
 	// A repository base URL is a plain scheme://host[/path]. Userinfo, query, and
 	// fragment have no meaning here and, since paths are concatenated onto this
 	// value for setup scripts and CDN purge URLs, would produce malformed URLs or
 	// leak credentials into generated content.
 	if u.User != nil {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: must not contain userinfo (user:password@)", c.PublicURL)
+		return fmt.Errorf("invalid %s %q: must not contain userinfo (user:password@)", setting, raw)
 	}
 	if u.RawQuery != "" {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: must not contain a query string", c.PublicURL)
+		return fmt.Errorf("invalid %s %q: must not contain a query string", setting, raw)
 	}
-	if u.Fragment != "" || strings.Contains(c.PublicURL, "#") {
-		return fmt.Errorf("invalid HAKOBIN_PUBLIC_URL %q: must not contain a fragment", c.PublicURL)
+	if u.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("invalid %s %q: must not contain a fragment", setting, raw)
 	}
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (c *Config) Bucket() (string, error) {
@@ -114,7 +132,11 @@ func (c *Config) SecretKey() (string, error) {
 
 func (c *Config) RepositoryBaseURL() (string, error) {
 	if c.PublicURL != "" {
-		return strings.TrimSuffix(c.PublicURL, "/"), nil
+		base := strings.TrimSuffix(c.PublicURL, "/")
+		if err := c.validateRepositoryURL(base, "HAKOBIN_PUBLIC_URL"); err != nil {
+			return "", err
+		}
+		return base, nil
 	}
 
 	bucket, err := c.Bucket()
@@ -124,10 +146,16 @@ func (c *Config) RepositoryBaseURL() (string, error) {
 
 	if c.S3Endpoint != "" {
 		endpoint := strings.TrimSuffix(c.S3Endpoint, "/")
+		var base string
 		if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-			return fmt.Sprintf("%s/%s", endpoint, bucket), nil
+			base = fmt.Sprintf("%s/%s", endpoint, bucket)
+		} else {
+			base = fmt.Sprintf("https://%s/%s", endpoint, bucket)
 		}
-		return fmt.Sprintf("https://%s/%s", endpoint, bucket), nil
+		if err := c.validateRepositoryURL(base, "S3_ENDPOINT"); err != nil {
+			return "", err
+		}
+		return base, nil
 	}
 
 	// Path-style access addresses the bucket as a path under the regional S3

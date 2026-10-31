@@ -213,7 +213,7 @@ func (rm *RepositoryManager) Init(ctx context.Context, req *InitRequest) error {
 
 	fmt.Println("\nQuick Start:")
 	fmt.Println("   Users can setup your repository:")
-	fmt.Printf("     curl -fsSL %s/setup.sh | sudo bash\n", baseURL)
+	fmt.Printf("     curl -fsSL %s | sudo bash\n", shQuote(baseURL+"/setup.sh"))
 	fmt.Println("\nUpload packages:")
 	fmt.Printf("     hakobin deb upload <package.deb> --distribution %s --component %s --architecture %s\n",
 		req.Metadata.Distributions[0],
@@ -222,9 +222,9 @@ func (rm *RepositoryManager) Init(ctx context.Context, req *InitRequest) error {
 	)
 	fmt.Println("\nAdvanced Usage:")
 	fmt.Println("   Custom key location:")
-	fmt.Printf("     hakobin deb --signing-key %s upload <package.deb>\n", keyPath)
+	fmt.Printf("     hakobin deb --signing-key %s upload <package.deb>\n", shQuote(keyPath))
 	fmt.Println("\n   CI/CD with environment variable:")
-	fmt.Printf("     export GPG_PRIVATE_KEY=\"$(cat %s)\"\n", keyPath)
+	fmt.Printf("     export GPG_PRIVATE_KEY=\"$(cat %s)\"\n", shQuote(keyPath))
 	fmt.Println("     hakobin deb upload <package.deb>")
 
 	return nil
@@ -1143,6 +1143,7 @@ func (rm *RepositoryManager) createSetupScript(ctx context.Context, metadata *Re
 	}
 
 	repoID := repositoryIdentifier(metadata, rm.cfg.S3BucketName)
+	publicKeyURL := shQuote(baseURL + "/pubkey.gpg")
 
 	// Every value derived from repository metadata is emitted through a
 	// single-quoted shell string so that a crafted Origin/Label/Description (or
@@ -1170,13 +1171,13 @@ mkdir -p /etc/apt/keyrings
 
 # Download and install GPG key (binary format, no gpg required)
 echo "Installing repository GPG key..."
-curl -fsSL %s/pubkey.gpg -o /etc/apt/keyrings/%s.gpg
+curl -fsSL %s -o /etc/apt/keyrings/%s.gpg
 chmod 644 /etc/apt/keyrings/%s.gpg
 
 # Add repository to sources list
 echo "Adding repository to APT sources..."
 cat > /etc/apt/sources.list.d/%s.list << 'EOF'
-`, shQuote(metadata.Label), shQuote(metadata.Origin), shQuote(metadata.Description), baseURL, repoID, repoID, repoID)
+`, shQuote(metadata.Label), shQuote(metadata.Origin), shQuote(metadata.Description), publicKeyURL, repoID, repoID, repoID)
 
 	for _, dist := range metadata.Distributions {
 		for _, comp := range metadata.Components {
@@ -1302,6 +1303,17 @@ func repositoryIdentifier(metadata *RepoMetadata, bucket string) string {
 		source = bucket
 	}
 
+	res := safeRepositoryIdentifier(source)
+	if len(res) < 2 {
+		res = safeRepositoryIdentifier(bucket)
+	}
+	if len(res) < 2 {
+		return "hakobin"
+	}
+	return res
+}
+
+func safeRepositoryIdentifier(source string) string {
 	var out strings.Builder
 	lastDash := false
 	for _, r := range strings.ToLower(source) {
@@ -1318,9 +1330,6 @@ func repositoryIdentifier(metadata *RepoMetadata, bucket string) string {
 	if len(res) > 50 {
 		res = res[:50]
 		res = strings.TrimSuffix(res, "-")
-	}
-	if len(res) < 2 {
-		return strings.ToLower(bucket)
 	}
 	return res
 }
