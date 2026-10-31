@@ -919,21 +919,26 @@ func (rm *RepositoryManager) ensureArchitecture(ctx context.Context, metadata *R
 }
 
 // requireKeyForSignedRepo refuses to mutate a repository that is currently
-// signed (has an InRelease for any distribution) unless an active signing key is
-// available. Rewriting a signed repo's Release without re-signing would leave a
-// stale InRelease / Release.gpg that no longer matches, breaking apt clients.
+// signed (has either an inline InRelease or detached Release.gpg signature for
+// any distribution) unless an active signing key is available. Rewriting a
+// signed repo's Release without re-signing would either leave a stale signature
+// or silently downgrade a partially-published signed repository.
 func (rm *RepositoryManager) requireKeyForSignedRepo(ctx context.Context, metadata *RepoMetadata, signingKeys *openpgp.SigningKeys) error {
 	if signingKeys != nil && signingKeys.Active != nil {
 		return nil
 	}
 	for _, dist := range metadata.Distributions {
-		inReleaseKey := rm.key(fmt.Sprintf("dists/%s/InRelease", dist))
-		signed, err := rm.store.Exists(ctx, inReleaseKey)
-		if err != nil {
-			return err
-		}
-		if signed {
-			return fmt.Errorf("repository %q is signed but no active signing key was provided; supply GPG_PRIVATE_KEY, --signing-key, or ./signing-key.gpg to re-sign it", dist)
+		for _, signaturePath := range []string{
+			fmt.Sprintf("dists/%s/InRelease", dist),
+			fmt.Sprintf("dists/%s/Release.gpg", dist),
+		} {
+			signed, err := rm.store.Exists(ctx, rm.key(signaturePath))
+			if err != nil {
+				return err
+			}
+			if signed {
+				return fmt.Errorf("repository %q is signed but no active signing key was provided; supply GPG_PRIVATE_KEY, --signing-key, or ./signing-key.gpg to re-sign it", dist)
+			}
 		}
 	}
 	return nil
