@@ -63,6 +63,8 @@ Hakobin is configured entirely via environment variables:
 # Storage Credentials
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
+# Required when the credentials are temporary (for example, AWS STS or OIDC)
+export AWS_SESSION_TOKEN="your-session-token"
 export S3_BUCKET_NAME="your-bucket-name"
 export AWS_REGION="us-east-1"
 
