@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -315,15 +316,16 @@ func parseAr(data []byte) ([]arEntry, error) {
 		name = strings.TrimSuffix(name, "/")
 
 		sizeStr := strings.TrimSpace(string(header[48:58]))
-		var size int
-		_, err := fmt.Sscanf(sizeStr, "%d", &size)
+		size64, err := strconv.ParseUint(sizeStr, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ar member size: %w", err)
 		}
-
-		if pos+size > len(data) {
+		// Subtraction-based bounds checking avoids both negative sizes and integer
+		// overflow in pos+size before slicing attacker-controlled archive data.
+		if size64 > uint64(len(data)-pos) {
 			return nil, fmt.Errorf("truncated ar member %s", name)
 		}
+		size := int(size64)
 
 		entryData := data[pos : pos+size]
 		pos += size
