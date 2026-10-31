@@ -72,7 +72,7 @@ func NewS3Store(ctx context.Context, cfg *config.Config) (*S3Store, error) {
 		return nil, err
 	}
 
-	creds := credentials.NewStaticCredentialsProvider(cfg.S3AccessKeyID, cfg.S3SecretAccessKey, "")
+	creds := credentials.NewStaticCredentialsProvider(cfg.S3AccessKeyID, cfg.S3SecretAccessKey, cfg.S3SessionToken)
 	awsCfg, err := s3config.LoadDefaultConfig(ctx,
 		s3config.WithRegion(cfg.S3Region),
 		s3config.WithCredentialsProvider(creds),

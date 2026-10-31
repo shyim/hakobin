@@ -37,7 +37,7 @@ export CLOUDFRONT_DISTRIBUTION_ID=E1A2B3C4D5E6F7
 ```
 
 > [!NOTE]
-> Hakobin will automatically reuse the same `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` credentials used for S3 to authenticate and trigger the CloudFront purge.
+> Hakobin will automatically reuse the same `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `AWS_REGION` credentials used for S3 to authenticate and trigger the CloudFront purge.
 
 ---
 

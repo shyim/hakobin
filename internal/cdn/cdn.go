@@ -90,7 +90,7 @@ func (c *CdnInvalidator) invalidateCloudFront(ctx context.Context, cfg *config.C
 		}
 		if cfg.S3AccessKeyID != "" && cfg.S3SecretAccessKey != "" {
 			opts = append(opts, cfconfig.WithCredentialsProvider(
-				credentials.NewStaticCredentialsProvider(cfg.S3AccessKeyID, cfg.S3SecretAccessKey, ""),
+				credentials.NewStaticCredentialsProvider(cfg.S3AccessKeyID, cfg.S3SecretAccessKey, cfg.S3SessionToken),
 			))
 		}
 	}

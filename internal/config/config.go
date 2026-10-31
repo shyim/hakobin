@@ -12,6 +12,7 @@ type Config struct {
 	S3Endpoint        string
 	S3AccessKeyID     string
 	S3SecretAccessKey string
+	S3SessionToken    string
 	S3BucketName      string
 	S3Region          string
 	S3UsePathStyle    bool
@@ -31,6 +32,7 @@ func FromEnv() *Config {
 		S3Endpoint:        env("S3_ENDPOINT"),
 		S3AccessKeyID:     env("AWS_ACCESS_KEY_ID"),
 		S3SecretAccessKey: env("AWS_SECRET_ACCESS_KEY"),
+		S3SessionToken:    env("AWS_SESSION_TOKEN"),
 		S3BucketName:      env("S3_BUCKET_NAME"),
 		S3Region:          region,
 		S3UsePathStyle:    usePathStyle,

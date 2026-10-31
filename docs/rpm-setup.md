@@ -19,6 +19,8 @@ First, configure your S3 storage credentials. You must export these environment 
 ```bash
 export AWS_ACCESS_KEY_ID=your-access-key
 export AWS_SECRET_ACCESS_KEY=your-secret-key
+# Required for temporary AWS STS/OIDC credentials
+export AWS_SESSION_TOKEN=your-session-token
 export S3_BUCKET_NAME=your-bucket-name
 export AWS_REGION=us-east-1
 ```

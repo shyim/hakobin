@@ -161,7 +161,8 @@ jobs:
           echo "Building package..."
 
       # Hakobin will automatically detect the temporary AWS credentials
-      # provided in the environment by the configure-aws-credentials step.
+      # (including AWS_SESSION_TOKEN) provided in the environment by the
+      # configure-aws-credentials step.
       - name: Upload to S3
         env:
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}

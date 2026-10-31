@@ -162,6 +162,29 @@ func TestS3StoreUploadDownload(t *testing.T) {
 	assert.Equal(t, "release", string(body))
 }
 
+func TestNewS3StorePreservesSessionToken(t *testing.T) {
+	fake := newFakeS3()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	store, err := NewS3Store(context.Background(), &config.Config{
+		S3Endpoint:        srv.URL,
+		S3AccessKeyID:     "temporary-access-key",
+		S3SecretAccessKey: "temporary-secret-key",
+		S3SessionToken:    "temporary-session-token",
+		S3BucketName:      "bucket",
+		S3Region:          "us-east-1",
+		S3UsePathStyle:    true,
+	})
+	require.NoError(t, err)
+
+	retrieved, err := store.client.Options().Credentials.Retrieve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "temporary-access-key", retrieved.AccessKeyID)
+	assert.Equal(t, "temporary-secret-key", retrieved.SecretAccessKey)
+	assert.Equal(t, "temporary-session-token", retrieved.SessionToken)
+}
+
 func TestS3StoreDownloadMissing(t *testing.T) {
 	store, _ := newTestStore(t)
 	_, err := store.Download(context.Background(), "missing")
