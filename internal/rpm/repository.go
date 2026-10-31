@@ -27,8 +27,9 @@ const (
 )
 
 type RpmRepositoryManager struct {
-	cfg   *config.Config
-	store storage.Store
+	cfg              *config.Config
+	store            storage.Store
+	invalidationHook func(context.Context, []string)
 }
 
 func NewRpmRepositoryManager(cfg *config.Config, store storage.Store) *RpmRepositoryManager {
@@ -382,14 +383,20 @@ func (rm *RpmRepositoryManager) rotateKey(ctx context.Context, signingKeys *open
 			signedPackages = append(signedPackages, *signed)
 		}
 
+		rewrittenPackageKeys := make([]string, 0, len(signedPackages))
 		for _, p := range signedPackages {
-			err = rm.store.UploadBytes(ctx, rm.key(repo.Repo, repo.Arch, p.Location), p.Raw, "application/x-rpm")
+			packageKey := rm.key(repo.Repo, repo.Arch, p.Location)
+			err = rm.store.UploadBytes(ctx, packageKey, p.Raw, "application/x-rpm")
 			if err != nil {
 				return err
 			}
+			rewrittenPackageKeys = append(rewrittenPackageKeys, packageKey)
 		}
 
-		err = rm.writeMetadata(ctx, repo.Repo, repo.Arch, signedPackages, signingKeys)
+		// Rotation rewrites each RPM under its existing URL. Purge those URLs
+		// together with the regenerated metadata so configured CDNs cannot keep
+		// serving packages signed by the previous key.
+		err = rm.writeMetadata(ctx, repo.Repo, repo.Arch, signedPackages, signingKeys, rewrittenPackageKeys...)
 		if err != nil {
 			return err
 		}
@@ -663,6 +670,10 @@ func hakobinOwnedRepomdHrefs(repomd []byte) ([]string, error) {
 // invalidateCDN purges the given paths from the configured CDN, surfacing a
 // misconfiguration as a loud warning rather than silently skipping.
 func (rm *RpmRepositoryManager) invalidateCDN(ctx context.Context, paths []string) {
+	if rm.invalidationHook != nil {
+		rm.invalidationHook(ctx, append([]string(nil), paths...))
+		return
+	}
 	invalidator, err := cdn.FromEnv()
 	if err != nil {
 		fmt.Printf("Warning: CDN not configured correctly, skipping invalidation: %v\n", err)

@@ -71,4 +71,4 @@ For example, when uploading `nginx.deb` to a Debian stable repository, Hakobin w
 -   `deb/dists/stable/Release.gpg`
 -   `deb/dists/stable/InRelease`
 
-Instead of purging the entire CDN cache (which is slow and wipes out cached `.deb`/`.rpm` package files that haven't changed), Hakobin only requests the CDN to purge the exact paths that were updated (specifically the metadata files). This keeps cached package downloads active on the CDN edge while making new packages available instantly!
+Instead of purging the entire CDN cache, Hakobin requests invalidation only for paths changed by the operation. This normally means repository metadata plus any package URL that was overwritten, removed, or re-signed during key rotation. Package responses use `Cache-Control: public, no-cache`, allowing shared caches to store them while requiring revalidation before reuse so an unchanged URL cannot serve stale bytes.

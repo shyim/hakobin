@@ -9,10 +9,11 @@ import (
 )
 
 func TestCacheControlFor(t *testing.T) {
-	// Package blobs are immutable and cached long.
-	assert.Equal(t, "public, max-age=31536000, immutable",
+	// Package URLs can be overwritten, so caches must revalidate them before
+	// reuse instead of treating the first response as immutable for a year.
+	assert.Equal(t, "public, no-cache",
 		cacheControlFor("deb/pool/n/nginx/nginx_1_amd64.deb", "application/vnd.debian.binary-package"))
-	assert.Equal(t, "public, max-age=31536000, immutable",
+	assert.Equal(t, "public, no-cache",
 		cacheControlFor("rpm/stable/x86_64/Packages/demo.rpm", "application/x-rpm"))
 	// Metadata is revalidated quickly.
 	assert.Equal(t, "public, max-age=60, must-revalidate",

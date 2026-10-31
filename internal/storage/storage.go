@@ -118,14 +118,15 @@ func (s *S3Store) UploadBytes(ctx context.Context, key string, body []byte, cont
 }
 
 // cacheControlFor returns a Cache-Control value appropriate to the object.
-// Package blobs are content-addressed (their key never changes for given
-// bytes) and can be cached for a long time; repository metadata changes in
-// place on every upload and must be revalidated quickly so clients do not act
-// on a stale index whose hashes no longer match.
+// Package paths can be overwritten by --force and RPM packages are rewritten
+// in place during signing-key rotation. They may be stored by shared caches,
+// but must be revalidated before reuse so an unchanged URL never serves stale
+// package bytes. Repository metadata changes in place on every upload and must
+// also be revalidated quickly.
 func cacheControlFor(key, contentType string) string {
 	switch contentType {
 	case "application/vnd.debian.binary-package", "application/x-rpm":
-		return "public, max-age=31536000, immutable"
+		return "public, no-cache"
 	}
 	// repodata metadata files are named by checksum and are effectively
 	// immutable, but repomd.xml / Release / Packages are rewritten in place.

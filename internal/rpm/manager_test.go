@@ -208,6 +208,10 @@ func TestRotateKeyReSignsDiscoveredRepos(t *testing.T) {
 	rm, store := testManager()
 	ctx := context.Background()
 	dir := t.TempDir()
+	var invalidated []string
+	rm.invalidationHook = func(_ context.Context, paths []string) {
+		invalidated = append(invalidated, paths...)
+	}
 
 	key, err := openpgp.GenerateKeyPair("Hakobin", "hakobin@example.com", "test", 0)
 	require.NoError(t, err)
@@ -223,6 +227,7 @@ func TestRotateKeyReSignsDiscoveredRepos(t *testing.T) {
 	require.NoError(t, err)
 	rotated := openpgp.NewSigningKeys(newKey, []*openpgp.PublicKeyCert{oldCert})
 
+	invalidated = nil
 	require.NoError(t, rm.RotateKey(ctx, rotated))
 
 	// The published key bundle must contain both keys after rotation.
@@ -231,6 +236,8 @@ func TestRotateKeyReSignsDiscoveredRepos(t *testing.T) {
 	certs, err := openpgp.ParsePublicKeyCerts(bundle)
 	require.NoError(t, err)
 	assert.Len(t, certs, 2)
+	assert.Contains(t, invalidated, "rpm/stable/x86_64/Packages/demo-1.0.0-1.el9.x86_64.rpm",
+		"rotation must purge each package URL rewritten with the new signature")
 }
 
 func TestRotateKeyRequiresActiveKey(t *testing.T) {
