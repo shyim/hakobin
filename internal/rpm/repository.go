@@ -76,6 +76,9 @@ func (rm *RpmRepositoryManager) Init(ctx context.Context, req *RpmInitRequest) e
 		return err
 	}
 	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		if err := rm.requireKeyForSignedRepo(lockCtx, req.Repo, req.Arch, req.SigningKeys); err != nil {
+			return err
+		}
 		bucket, err := rm.cfg.Bucket()
 		if err != nil {
 			return err
@@ -112,6 +115,9 @@ func (rm *RpmRepositoryManager) Upload(ctx context.Context, req *RpmUploadReques
 }
 
 func (rm *RpmRepositoryManager) upload(ctx context.Context, req *RpmUploadRequest) error {
+	if err := rm.requireKeyForSignedRepo(ctx, req.Repo, req.Arch, req.SigningKeys); err != nil {
+		return err
+	}
 	if req.SigningKeys != nil {
 		if err := req.SigningKeys.EnsureActiveUsable(); err != nil {
 			return err
@@ -254,6 +260,9 @@ func (rm *RpmRepositoryManager) Remove(ctx context.Context, req *RpmRemoveReques
 }
 
 func (rm *RpmRepositoryManager) remove(ctx context.Context, req *RpmRemoveRequest) error {
+	if err := rm.requireKeyForSignedRepo(ctx, req.Repo, req.RepoArch, req.SigningKeys); err != nil {
+		return err
+	}
 	if req.SigningKeys != nil {
 		if err := req.SigningKeys.EnsureActiveUsable(); err != nil {
 			return err
@@ -604,6 +613,30 @@ func (rm *RpmRepositoryManager) writeMetadata(ctx context.Context, repo, arch st
 
 	rm.invalidateCDN(ctx, paths)
 
+	return nil
+}
+
+// requireKeyForSignedRepo prevents an accidental downgrade of an existing
+// signed repository. A missing CI secret must fail the mutation instead of
+// deleting repomd.xml.asc/the public key and publishing unsigned packages.
+func (rm *RpmRepositoryManager) requireKeyForSignedRepo(ctx context.Context, repo, arch string, signingKeys *openpgp.SigningKeys) error {
+	if signingKeys != nil && signingKeys.Active != nil {
+		return nil
+	}
+
+	markers := []string{
+		rm.key(repo, arch, "repodata/repomd.xml.asc"),
+		rm.key(repo, arch, RpmPublicKeyName),
+	}
+	for _, marker := range markers {
+		exists, err := rm.store.Exists(ctx, marker)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("RPM repository %s/%s is signed but no active signing key was provided; supply GPG_PRIVATE_KEY, --signing-key, or ./signing-key.gpg", repo, arch)
+		}
+	}
 	return nil
 }
 
