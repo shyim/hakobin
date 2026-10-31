@@ -3,6 +3,7 @@ package openpgp
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -125,6 +126,35 @@ func TestDetachedSigningAndVerification(t *testing.T) {
 	sig, err := active.SignDetached(data)
 	require.NoError(t, err)
 	assert.Contains(t, sig, "-----BEGIN PGP SIGNATURE-----")
+}
+
+func TestSavePrivateKeyRefusesToOverwriteExistingFile(t *testing.T) {
+	key, err := GenerateKeyPair("Hakobin", "hakobin@example.com", "test", 0)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "signing-key.gpg")
+	require.NoError(t, os.WriteFile(path, []byte("existing-secret"), 0600))
+
+	err = key.SavePrivateKey(path)
+	require.ErrorContains(t, err, "refusing to overwrite")
+	content, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, "existing-secret", string(content), "the existing key must remain untouched")
+}
+
+func TestSavePrivateKeyCreatesPrivateFile(t *testing.T) {
+	key, err := GenerateKeyPair("Hakobin", "hakobin@example.com", "test", 0)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "private", "signing-key.gpg")
+	require.NoError(t, key.SavePrivateKey(path))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	loaded, err := LoadKeyPairFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, key.Fingerprint, loaded.Fingerprint)
 }
 
 func TestParsePublicKeyCertsAcceptsPrivateKeyBlock(t *testing.T) {

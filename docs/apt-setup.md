@@ -64,6 +64,9 @@ hakobin deb init \
 *   Signs the repository metadata.
 *   Writes `deb/pubkey.asc`, `deb/pubkey.gpg` (the public keys), and `deb/setup.sh` (a client bootstrapping script) to S3.
 
+Initialization refuses to overwrite an existing `./signing-key.gpg`. Move or
+back up an existing key, or run the command from a dedicated empty directory.
+
 > [!IMPORTANT]
 > Save `signing-key.gpg` in a secure location (e.g., a credential manager or CI secrets). Do **not** commit it to source control. It is used to sign all future package uploads.
 
