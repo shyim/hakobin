@@ -242,8 +242,8 @@ func (rm *RepositoryManager) Upload(ctx context.Context, req *UploadRequest) err
 			return fmt.Errorf("file not found: %s", f)
 		}
 	}
-	return rm.withLock(ctx, func() error {
-		return rm.upload(ctx, req)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.upload(lockCtx, req)
 	})
 }
 
@@ -474,8 +474,8 @@ func (rm *RepositoryManager) Remove(ctx context.Context, req *RemoveRequest) err
 	if err := validateName("architecture", req.Architecture); err != nil {
 		return err
 	}
-	return rm.withLock(ctx, func() error {
-		return rm.remove(ctx, req)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.remove(lockCtx, req)
 	})
 }
 
@@ -608,8 +608,8 @@ func (rm *RepositoryManager) removeFromPackagesIndex(ctx context.Context, repo a
 }
 
 func (rm *RepositoryManager) RotateKey(ctx context.Context, signingKeys *openpgp.SigningKeys) error {
-	return rm.withLock(ctx, func() error {
-		return rm.rotateKey(ctx, signingKeys)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.rotateKey(lockCtx, signingKeys)
 	})
 }
 
@@ -1272,18 +1272,8 @@ func (rm *RepositoryManager) key(path string) string {
 
 // withLock runs fn while holding the repository-scoped lock, serializing
 // metadata mutations so concurrent uploads/removes cannot lose updates.
-func (rm *RepositoryManager) withLock(ctx context.Context, fn func() error) error {
-	owner := uuid.NewString()
-	lock, err := rm.store.AcquireLock(ctx, rm.key(LockPath), owner, lockTTLSeconds)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if relErr := rm.store.ReleaseLock(ctx, lock); relErr != nil {
-			fmt.Printf("Warning: failed to release repository lock: %v\n", relErr)
-		}
-	}()
-	return fn()
+func (rm *RepositoryManager) withLock(ctx context.Context, fn func(context.Context) error) error {
+	return storage.WithLock(ctx, rm.store, rm.key(LockPath), uuid.NewString(), lockTTLSeconds, fn)
 }
 
 func (rm *RepositoryManager) debBaseURL() (string, error) {

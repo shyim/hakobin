@@ -75,14 +75,14 @@ func (rm *RpmRepositoryManager) Init(ctx context.Context, req *RpmInitRequest) e
 	if err := validateRepoArch(req.Repo, req.Arch); err != nil {
 		return err
 	}
-	return rm.withLock(ctx, func() error {
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
 		bucket, err := rm.cfg.Bucket()
 		if err != nil {
 			return err
 		}
 		fmt.Printf("Initializing RPM repository '%s' for %s in S3 bucket: %s\n", req.Repo, req.Arch, bucket)
 
-		if err := rm.writeMetadata(ctx, req.Repo, req.Arch, nil, req.SigningKeys); err != nil {
+		if err := rm.writeMetadata(lockCtx, req.Repo, req.Arch, nil, req.SigningKeys); err != nil {
 			return err
 		}
 
@@ -106,8 +106,8 @@ func (rm *RpmRepositoryManager) Upload(ctx context.Context, req *RpmUploadReques
 			return fmt.Errorf("file not found: %s", f)
 		}
 	}
-	return rm.withLock(ctx, func() error {
-		return rm.upload(ctx, req)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.upload(lockCtx, req)
 	})
 }
 
@@ -248,8 +248,8 @@ func (rm *RpmRepositoryManager) Remove(ctx context.Context, req *RpmRemoveReques
 	if err := validateRepoArch(req.Repo, req.RepoArch); err != nil {
 		return err
 	}
-	return rm.withLock(ctx, func() error {
-		return rm.remove(ctx, req)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.remove(lockCtx, req)
 	})
 }
 
@@ -345,8 +345,8 @@ func (rm *RpmRepositoryManager) RotateKey(ctx context.Context, signingKeys *open
 	if err := signingKeys.EnsureActiveUsable(); err != nil {
 		return err
 	}
-	return rm.withLock(ctx, func() error {
-		return rm.rotateKey(ctx, signingKeys)
+	return rm.withLock(ctx, func(lockCtx context.Context) error {
+		return rm.rotateKey(lockCtx, signingKeys)
 	})
 }
 
@@ -697,18 +697,8 @@ func (rm *RpmRepositoryManager) key(repo, arch, path string) string {
 
 // withLock runs fn while holding the RPM repository lock, serializing metadata
 // mutations so concurrent uploads/removes cannot corrupt repodata.
-func (rm *RpmRepositoryManager) withLock(ctx context.Context, fn func() error) error {
-	owner := uuid.NewString()
-	lock, err := rm.store.AcquireLock(ctx, rpmLockPath, owner, rpmLockTTLSeconds)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if relErr := rm.store.ReleaseLock(ctx, lock); relErr != nil {
-			fmt.Printf("Warning: failed to release repository lock: %v\n", relErr)
-		}
-	}()
-	return fn()
+func (rm *RpmRepositoryManager) withLock(ctx context.Context, fn func(context.Context) error) error {
+	return storage.WithLock(ctx, rm.store, rpmLockPath, uuid.NewString(), rpmLockTTLSeconds, fn)
 }
 
 // segmentRe matches a single safe path segment for --repo/--arch: no slashes,
