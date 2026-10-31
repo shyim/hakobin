@@ -246,6 +246,21 @@ func TestS3StoreLockStealsExpired(t *testing.T) {
 	assert.Equal(t, "owner-b", lock.Owner)
 }
 
+func TestS3StoreRenewLockExtendsLeaseAndChecksOwner(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	lock, err := store.AcquireLock(ctx, "deb/.lock", "owner-a", 0)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RenewLock(ctx, lock, 60))
+	blocked, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	_, err = store.AcquireLock(blocked, "deb/.lock", "owner-b", 60)
+	require.Error(t, err, "a renewed lock must not be stealable")
+
+	require.Error(t, store.RenewLock(ctx, &Lock{Key: lock.Key, Owner: "owner-b"}, 60))
+}
+
 // TestS3StoreLockStealIsAtomic verifies the compare-and-swap steal: once one
 // waiter steals an expired lock, a second waiter that had read the same expired
 // lock cannot also "steal" it (its stale conditional overwrite is rejected),

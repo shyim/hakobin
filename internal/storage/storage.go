@@ -45,8 +45,12 @@ type Store interface {
 	// returned Lock must be released with its Release method. Time is evaluated
 	// internally on every retry so a lock that expires mid-wait is observed.
 	AcquireLock(ctx context.Context, key, owner string, ttlSeconds int64) (*Lock, error)
+	// RenewLock atomically extends a lock only while the same owner still holds it.
+	RenewLock(ctx context.Context, lock *Lock, ttlSeconds int64) error
 	// ReleaseLock removes a lock previously acquired by this owner. It is a
-	// best-effort no-op if the lock was already stolen or released.
+	// best-effort no-op if the lock was already stolen or released. Implementations
+	// must compare and delete atomically so an expired owner cannot delete a
+	// successor's lock.
 	ReleaseLock(ctx context.Context, lock *Lock) error
 }
 
@@ -299,18 +303,75 @@ func (s *S3Store) ReleaseLock(ctx context.Context, lock *Lock) error {
 	}
 	// Only delete the lock if we still own it, so we never remove a lock that
 	// was stolen from us after our TTL expired.
-	existing, err := s.Download(ctx, lock.Key)
+	existing, etag, err := s.downloadWithETag(ctx, lock.Key)
 	if err != nil {
-		return nil
+		if isNotFoundError(err) {
+			return nil
+		}
+		return err
 	}
 	var cur lockRecord
-	if json.Unmarshal(existing, &cur) == nil && cur.Owner != lock.Owner {
+	if err := json.Unmarshal(existing, &cur); err != nil {
+		return fmt.Errorf("invalid repository lock %s: %w", lock.Key, err)
+	}
+	if cur.Owner != lock.Owner {
 		return nil
 	}
-	return s.Delete(ctx, lock.Key)
+	_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket:  aws.String(s.bucket),
+		Key:     aws.String(lock.Key),
+		IfMatch: aws.String(etag),
+	})
+	if isPreconditionFailed(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to release lock s3://%s/%s: %w", s.bucket, lock.Key, err)
+	}
+	return nil
+}
+
+func (s *S3Store) RenewLock(ctx context.Context, lock *Lock, ttlSeconds int64) error {
+	if lock == nil {
+		return fmt.Errorf("cannot renew a nil repository lock")
+	}
+	existing, etag, err := s.downloadWithETag(ctx, lock.Key)
+	if err != nil {
+		return err
+	}
+	var cur lockRecord
+	if err := json.Unmarshal(existing, &cur); err != nil {
+		return fmt.Errorf("invalid repository lock %s: %w", lock.Key, err)
+	}
+	if cur.Owner != lock.Owner {
+		return fmt.Errorf("repository lock %s is no longer owned by %s", lock.Key, lock.Owner)
+	}
+
+	cur.ExpiresAt = time.Now().Unix() + ttlSeconds
+	body, err := json.Marshal(cur)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(lock.Key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String("application/json"),
+		IfMatch:     aws.String(etag),
+	})
+	if isPreconditionFailed(err) {
+		return fmt.Errorf("repository lock %s changed while it was being renewed", lock.Key)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to renew lock s3://%s/%s: %w", s.bucket, lock.Key, err)
+	}
+	return nil
 }
 
 func isPreconditionFailed(err error) bool {
+	if err == nil {
+		return false
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		code := apiErr.ErrorCode()
@@ -323,6 +384,9 @@ func isPreconditionFailed(err error) bool {
 }
 
 func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
 	var nsk *s3types.NoSuchKey
 	var nsb *s3types.NoSuchBucket
 	var nf *s3types.NotFound
@@ -438,6 +502,95 @@ func (m *MemoryStore) ReleaseLock(ctx context.Context, lock *Lock) error {
 		}
 	}
 	delete(m.objects, lock.Key)
+	return nil
+}
+
+func (m *MemoryStore) RenewLock(ctx context.Context, lock *Lock, ttlSeconds int64) error {
+	if lock == nil {
+		return fmt.Errorf("cannot renew a nil repository lock")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	obj, exists := m.objects[lock.Key]
+	if !exists {
+		return fmt.Errorf("repository lock %s no longer exists", lock.Key)
+	}
+	var cur lockRecord
+	if err := json.Unmarshal(obj.body, &cur); err != nil {
+		return err
+	}
+	if cur.Owner != lock.Owner {
+		return fmt.Errorf("repository lock %s is no longer owned by %s", lock.Key, lock.Owner)
+	}
+	cur.ExpiresAt = time.Now().Unix() + ttlSeconds
+	body, err := json.Marshal(cur)
+	if err != nil {
+		return err
+	}
+	m.objects[lock.Key] = &storedObject{body: body, contentType: "application/json"}
+	return nil
+}
+
+// WithLock runs fn while maintaining an expiring repository lock. The operation
+// context is cancelled immediately if renewal fails, preventing a writer that
+// lost its lease from continuing to publish metadata.
+func WithLock(ctx context.Context, store Store, key, owner string, ttlSeconds int64, fn func(context.Context) error) error {
+	if ttlSeconds <= 0 {
+		return fmt.Errorf("repository lock TTL must be positive")
+	}
+	lock, err := store.AcquireLock(ctx, key, owner, ttlSeconds)
+	if err != nil {
+		return err
+	}
+
+	opCtx, cancelOperation := context.WithCancel(ctx)
+	interval := time.Duration(ttlSeconds) * time.Second / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	renewErr := make(chan error, 1)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-opCtx.Done():
+				return
+			case <-ticker.C:
+				if err := store.RenewLock(opCtx, lock, ttlSeconds); err != nil {
+					renewErr <- err
+					cancelOperation()
+					return
+				}
+			}
+		}
+	}()
+
+	operationErr := fn(opCtx)
+	cancelOperation()
+	<-heartbeatDone
+
+	var heartbeatErr error
+	select {
+	case heartbeatErr = <-renewErr:
+	default:
+	}
+
+	releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 10*time.Second)
+	releaseErr := store.ReleaseLock(releaseCtx, lock)
+	cancelRelease()
+
+	if heartbeatErr != nil {
+		return fmt.Errorf("repository lock renewal failed: %w", heartbeatErr)
+	}
+	if operationErr != nil {
+		return operationErr
+	}
+	if releaseErr != nil {
+		return fmt.Errorf("failed to release repository lock: %w", releaseErr)
+	}
 	return nil
 }
 

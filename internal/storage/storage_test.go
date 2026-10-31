@@ -2,11 +2,29 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type observingLockStore struct {
+	*MemoryStore
+	renewed chan struct{}
+	once    sync.Once
+	err     error
+}
+
+func (s *observingLockStore) RenewLock(ctx context.Context, lock *Lock, ttlSeconds int64) error {
+	s.once.Do(func() { close(s.renewed) })
+	if s.err != nil {
+		return s.err
+	}
+	return s.MemoryStore.RenewLock(ctx, lock, ttlSeconds)
+}
 
 func TestCacheControlFor(t *testing.T) {
 	// Package blobs are immutable and cached long.
@@ -105,6 +123,47 @@ func TestMemoryStoreLockStealsAfterExpiry(t *testing.T) {
 	lock, err := store.AcquireLock(ctx, "deb/.lock", "owner-b", 60)
 	require.NoError(t, err)
 	assert.Equal(t, "owner-b", lock.Owner)
+}
+
+func TestMemoryStoreRenewLockExtendsLeaseAndChecksOwner(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	lock, err := store.AcquireLock(ctx, "deb/.lock", "owner-a", 0)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RenewLock(ctx, lock, 60))
+	_, err = store.AcquireLock(ctx, "deb/.lock", "owner-b", 60)
+	require.Error(t, err, "a renewed lock must not be stealable")
+
+	require.Error(t, store.RenewLock(ctx, &Lock{Key: lock.Key, Owner: "owner-b"}, 60))
+}
+
+func TestWithLockRenewsAndCancelsOnLostLease(t *testing.T) {
+	t.Run("renews", func(t *testing.T) {
+		store := &observingLockStore{MemoryStore: NewMemoryStore(), renewed: make(chan struct{})}
+		err := WithLock(context.Background(), store, "deb/.lock", "owner-a", 3, func(ctx context.Context) error {
+			select {
+			case <-store.renewed:
+				return nil
+			case <-time.After(2 * time.Second):
+				return errors.New("lock was not renewed")
+			}
+		})
+		require.NoError(t, err)
+		_, exists := store.Body("deb/.lock")
+		assert.False(t, exists, "the lock should be released after the operation")
+	})
+
+	t.Run("cancels operation when renewal fails", func(t *testing.T) {
+		store := &observingLockStore{
+			MemoryStore: NewMemoryStore(), renewed: make(chan struct{}), err: errors.New("lease lost"),
+		}
+		err := WithLock(context.Background(), store, "deb/.lock", "owner-a", 3, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		require.ErrorContains(t, err, "repository lock renewal failed")
+	})
 }
 
 func TestReleaseLockDoesNotRemoveStolenLock(t *testing.T) {

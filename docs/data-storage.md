@@ -83,4 +83,5 @@ What happens if two CI/CD builds try to upload a package at the same time?
 To prevent corrupting the repository index files, Hakobin uses a lock-based synchronization mechanism on S3:
 1.  Before making any changes, Hakobin creates an empty object named `.hakobin.lock` under the repository prefix (e.g., `deb/.hakobin.lock` or `rpm/.hakobin.lock`).
 2.  If the lock already exists, Hakobin will wait (poll) until it is released or until the lock's Time-To-Live (TTL) expires (default is 5 minutes). This safeguards against a stalled build locking the repository forever.
-3.  Once the upload and metadata generation are complete, Hakobin deletes the lock file.
+3.  While work is active, Hakobin renews the lease periodically. If renewal fails, the operation is cancelled so a writer that lost ownership cannot continue publishing metadata.
+4.  Once the upload and metadata generation are complete, Hakobin deletes the lock file conditionally, only if its owner and object version still match. This prevents an expired writer from deleting a newer writer's lock.
