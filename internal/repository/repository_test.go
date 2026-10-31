@@ -119,6 +119,31 @@ func TestAptWorkflowUploadRemoveAndRotateKeyUsesMemoryStore(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestRequireKeyForSignedRepoDetectsEitherSignatureFormat(t *testing.T) {
+	metadata := &RepoMetadata{Distributions: []string{"stable"}}
+
+	for _, signaturePath := range []string{
+		"deb/dists/stable/InRelease",
+		"deb/dists/stable/Release.gpg",
+	} {
+		t.Run(signaturePath, func(t *testing.T) {
+			store := storage.NewMemoryStore()
+			manager := NewRepositoryManager(&config.Config{}, store)
+			require.NoError(t, store.UploadBytes(context.Background(), signaturePath, []byte("signature"), "application/pgp-signature"))
+
+			err := manager.requireKeyForSignedRepo(context.Background(), metadata, nil)
+			require.ErrorContains(t, err, "is signed but no active signing key was provided")
+		})
+	}
+}
+
+func TestRequireKeyForSignedRepoAllowsUnsignedRepository(t *testing.T) {
+	manager := NewRepositoryManager(&config.Config{}, storage.NewMemoryStore())
+	metadata := &RepoMetadata{Distributions: []string{"stable"}}
+
+	require.NoError(t, manager.requireKeyForSignedRepo(context.Background(), metadata, nil))
+}
+
 func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
 	cfg := &config.Config{
 		S3AccessKeyID:     "test-access-key",
