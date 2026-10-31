@@ -62,6 +62,40 @@ func TestInitWritesRepodata(t *testing.T) {
 	assert.True(t, ok, "init must write repomd.xml")
 }
 
+func TestSignedRepositoryRejectsMutationsWithoutActiveKey(t *testing.T) {
+	rm, store := testManager()
+	ctx := context.Background()
+	key, err := openpgp.GenerateKeyPair("Hakobin", "hakobin@example.com", "test", 0)
+	require.NoError(t, err)
+	signed := openpgp.NewSigningKeys(key, nil)
+
+	require.NoError(t, rm.Init(ctx, &RpmInitRequest{
+		Repo: "stable", Arch: "x86_64", SigningKeys: signed,
+	}))
+
+	path := makeRpm(t, t.TempDir(), "demo", "1.0.0", "1.el9", "x86_64")
+	err = rm.Upload(ctx, &RpmUploadRequest{
+		RpmFiles: []string{path}, Repo: "stable", Arch: "x86_64",
+	})
+	require.ErrorContains(t, err, "is signed but no active signing key")
+
+	err = rm.Remove(ctx, &RpmRemoveRequest{
+		Package: "demo", Epoch: "0", Version: "1.0.0", Release: "1.el9",
+		Arch: "x86_64", Repo: "stable", RepoArch: "x86_64", Force: true,
+	})
+	require.ErrorContains(t, err, "is signed but no active signing key")
+
+	err = rm.Init(ctx, &RpmInitRequest{Repo: "stable", Arch: "x86_64"})
+	require.ErrorContains(t, err, "is signed but no active signing key")
+
+	_, signatureExists := store.Body("rpm/stable/x86_64/repodata/repomd.xml.asc")
+	assert.True(t, signatureExists, "a rejected mutation must preserve the repository signature")
+	_, keyExists := store.Body("rpm/stable/x86_64/" + RpmPublicKeyName)
+	assert.True(t, keyExists, "a rejected mutation must preserve the published key")
+	_, packageExists := store.Body("rpm/stable/x86_64/Packages/demo-1.0.0-1.el9.x86_64.rpm")
+	assert.False(t, packageExists, "a rejected mutation must not upload an unsigned package")
+}
+
 func TestUploadListRemoveRoundTrip(t *testing.T) {
 	rm, store := testManager()
 	ctx := context.Background()
