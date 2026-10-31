@@ -210,14 +210,31 @@ func (k *KeyPair) SavePrivateKey(path string) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
-	err = os.WriteFile(path, []byte(armored), 0600)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("refusing to overwrite existing private key file %s", path)
+		}
 		return err
 	}
+	complete := false
+	defer func() {
+		_ = file.Close()
+		if !complete {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.WriteString(armored); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	complete = true
 
 	return nil
 }

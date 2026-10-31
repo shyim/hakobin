@@ -20,6 +20,7 @@ import (
 )
 
 func TestAptWorkflowUploadRemoveAndRotateKeyUsesMemoryStore(t *testing.T) {
+	t.Chdir(t.TempDir())
 	cfg := &config.Config{
 		S3AccessKeyID:     "test-access-key",
 		S3SecretAccessKey: "test-secret-key",
@@ -145,6 +146,7 @@ func TestRequireKeyForSignedRepoAllowsUnsignedRepository(t *testing.T) {
 }
 
 func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
+	t.Chdir(t.TempDir())
 	cfg := &config.Config{
 		S3AccessKeyID:     "test-access-key",
 		S3SecretAccessKey: "test-secret-key",
@@ -226,6 +228,7 @@ func TestUploadAllArchitecturePackageIsVisibleInConcreteArch(t *testing.T) {
 }
 
 func TestListPackages(t *testing.T) {
+	t.Chdir(t.TempDir())
 	cfg := &config.Config{
 		S3BucketName: "test-bucket", S3Region: "us-east-1", S3UsePathStyle: true,
 		S3AccessKeyID: "k", S3SecretAccessKey: "s",
@@ -276,6 +279,7 @@ func TestListPackages(t *testing.T) {
 }
 
 func TestForceUploadReplacesStanzaInsteadOfDuplicating(t *testing.T) {
+	t.Chdir(t.TempDir())
 	cfg := &config.Config{
 		S3BucketName: "test-bucket", S3Region: "us-east-1", S3UsePathStyle: true,
 		S3AccessKeyID: "k", S3SecretAccessKey: "s",
@@ -333,6 +337,7 @@ func TestForceUploadReplacesStanzaInsteadOfDuplicating(t *testing.T) {
 }
 
 func TestSetupScriptNeutralizesShellInjectionInMetadata(t *testing.T) {
+	t.Chdir(t.TempDir())
 	cfg := &config.Config{
 		S3BucketName: "test-bucket", S3Region: "us-east-1", S3UsePathStyle: true,
 		S3AccessKeyID: "k", S3SecretAccessKey: "s",
