@@ -69,6 +69,8 @@ export AWS_REGION="us-east-1"
 # (Optional) For MinIO, R2, or custom S3 endpoints
 export S3_ENDPOINT="http://localhost:9000"
 export S3_USE_PATH_STYLE="true"
+# Required only for non-loopback development endpoints that cannot use HTTPS
+# export HAKOBIN_ALLOW_INSECURE_HTTP="true"
 
 # Public URL and Signing GPG Key
 export HAKOBIN_PUBLIC_URL="https://packages.example.com"

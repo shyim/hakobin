@@ -17,7 +17,7 @@ func TestParseBoolAcceptsCommonSpellings(t *testing.T) {
 }
 
 func TestValidatePublicURL(t *testing.T) {
-	valid := []string{"", "https://packages.example.com", "http://localhost:9000/repo"}
+	valid := []string{"", "https://packages.example.com", "http://localhost:9000/repo", "http://127.0.0.1:9000/repo"}
 	for _, u := range valid {
 		c := &Config{PublicURL: u}
 		assert.NoError(t, c.validatePublicURL(), "expected %q to be valid", u)
@@ -29,7 +29,11 @@ func TestValidatePublicURL(t *testing.T) {
 		"https://user:pass@packages.example.com",
 		"https://packages.example.com?token=abc",
 		"https://packages.example.com/repo#frag",
+		"http://packages.example.com/repo",
 	}
+
+	c := &Config{PublicURL: "http://packages.example.com/repo", AllowInsecureHTTP: true}
+	assert.NoError(t, c.validatePublicURL(), "explicit insecure override should allow development HTTP endpoints")
 	for _, u := range invalid {
 		c := &Config{PublicURL: u}
 		assert.Error(t, c.validatePublicURL(), "expected %q to be invalid", u)
@@ -44,6 +48,7 @@ func TestFromEnvReadsEnvironment(t *testing.T) {
 	t.Setenv("S3_BUCKET_NAME", "my-bucket")
 	t.Setenv("S3_USE_PATH_STYLE", "yes")
 	t.Setenv("HAKOBIN_PUBLIC_URL", "https://packages.example.com")
+	t.Setenv("HAKOBIN_ALLOW_INSECURE_HTTP", "true")
 
 	c := FromEnv()
 	assert.Equal(t, "eu-west-1", c.S3Region)
@@ -53,6 +58,7 @@ func TestFromEnvReadsEnvironment(t *testing.T) {
 	assert.Equal(t, "my-bucket", c.S3BucketName)
 	assert.True(t, c.S3UsePathStyle)
 	assert.Equal(t, "https://packages.example.com", c.PublicURL)
+	assert.True(t, c.AllowInsecureHTTP)
 }
 
 func TestFromEnvDefaultsRegion(t *testing.T) {
@@ -114,6 +120,17 @@ func TestRepositoryBaseURLEndpoint(t *testing.T) {
 	url, err = c.RepositoryBaseURL()
 	require.NoError(t, err)
 	assert.Equal(t, "https://minio.local/b", url)
+}
+
+func TestRepositoryBaseURLRejectsInsecureNonLoopbackEndpoint(t *testing.T) {
+	c := &Config{S3BucketName: "b", S3Endpoint: "http://minio.internal:9000"}
+	_, err := c.RepositoryBaseURL()
+	require.ErrorContains(t, err, "plain HTTP is unsafe")
+
+	c.AllowInsecureHTTP = true
+	got, err := c.RepositoryBaseURL()
+	require.NoError(t, err)
+	assert.Equal(t, "http://minio.internal:9000/b", got)
 }
 
 func TestRepositoryBaseURLPathStyleForAWS(t *testing.T) {

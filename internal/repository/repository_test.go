@@ -351,6 +351,30 @@ func TestSetupScriptNeutralizesShellInjectionInMetadata(t *testing.T) {
 	requireValidBash(t, script)
 }
 
+func TestSetupScriptQuotesPublicURL(t *testing.T) {
+	cfg := &config.Config{
+		S3BucketName: "test-bucket", S3Region: "us-east-1", S3UsePathStyle: true,
+		S3AccessKeyID: "k", S3SecretAccessKey: "s",
+		PublicURL: "https://packages.example.test/$(id)",
+	}
+	store := storage.NewMemoryStore()
+	manager := NewRepositoryManager(cfg, store)
+
+	require.NoError(t, manager.Init(context.Background(), &InitRequest{
+		Metadata: RepoMetadata{
+			Origin: "Acme", Label: "Acme", Description: "Acme packages",
+			Distributions: []string{"stable"}, Components: []string{"main"}, Architectures: []string{"amd64"},
+		},
+		KeyName: "GPG Key", KeyEmail: "gpg@example.com",
+	}))
+
+	body, ok := store.Body("deb/setup.sh")
+	require.True(t, ok)
+	script := string(body)
+	assert.Contains(t, script, "curl -fsSL 'https://packages.example.test/$(id)/deb/pubkey.gpg'")
+	requireValidBash(t, script)
+}
+
 func requireValidBash(t *testing.T, script string) {
 	t.Helper()
 	f, err := os.CreateTemp("", "setup-*.sh")
