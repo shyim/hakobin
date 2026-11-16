@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.5.4
 	github.com/aws/aws-sdk-go-v2/service/cloudfront v1.75.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.8
-	github.com/aws/smithy-go v1.28.8
+	github.com/aws/smithy-go v1.28.9
 	github.com/google/rpmpack v0.7.1
 	github.com/google/uuid v1.6.0
 	github.com/grafana/s3-mock v0.2.0
